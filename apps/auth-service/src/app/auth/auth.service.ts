@@ -105,6 +105,10 @@ export class AuthService {
       this.otpService.markAsUsed(latestOtp.id),
     ]);
 
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     return {
       message: 'Email verified successfully',
       accessToken: this.generateAccessToken(user.id, user.email),

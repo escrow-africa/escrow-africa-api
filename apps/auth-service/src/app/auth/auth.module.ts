@@ -17,8 +17,8 @@ import { OtpModule } from '../otp/otp.module';
     PassportModule,
     ConfigModule.forRoot(),
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'fallback_secret',
-      signOptions: { expiresIn: (process.env.JWT_EXPIRE || '1h') as any },
+      secret: process.env.JWT_SECRET!,
+      signOptions: { expiresIn: process.env.JWT_EXPIRE! as any },
     }),
   ],
   controllers: [AuthController],
