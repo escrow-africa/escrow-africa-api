@@ -32,6 +32,9 @@
     },
     {
       "path": "./libs/common"
+    },
+    {
+      "path": "./apps/dispute-service"
     }
   ]
 }

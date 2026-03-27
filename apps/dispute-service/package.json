@@ -1,5 +1,5 @@
 {
-  "name": "@org/notification-service",
+  "name": "@org/dispute-service",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -15,7 +15,7 @@
           "args": [
             "--node-env=production"
           ],
-          "cwd": "apps/notification-service"
+          "cwd": "apps/dispute-service"
         },
         "configurations": {
           "development": {
@@ -32,8 +32,8 @@
         "cache": true,
         "executor": "@nx/js:prune-lockfile",
         "outputs": [
-          "{workspaceRoot}/apps/notification-service/dist/package.json",
-          "{workspaceRoot}/apps/notification-service/dist/package-lock.json"
+          "{workspaceRoot}/apps/dispute-service/dist/package.json",
+          "{workspaceRoot}/apps/dispute-service/dist/package-lock.json"
         ],
         "options": {
           "buildTarget": "build"
@@ -45,7 +45,7 @@
         ],
         "cache": true,
         "outputs": [
-          "{workspaceRoot}/apps/notification-service/dist/workspace_modules"
+          "{workspaceRoot}/apps/dispute-service/dist/workspace_modules"
         ],
         "executor": "@nx/js:copy-workspace-modules",
         "options": {
@@ -67,15 +67,15 @@
           "build"
         ],
         "options": {
-          "buildTarget": "@org/notification-service:build",
+          "buildTarget": "@org/dispute-service:build",
           "runBuildTargetDependencies": false
         },
         "configurations": {
           "development": {
-            "buildTarget": "@org/notification-service:build:development"
+            "buildTarget": "@org/dispute-service:build:development"
           },
           "production": {
-            "buildTarget": "@org/notification-service:build:production"
+            "buildTarget": "@org/dispute-service:build:production"
           }
         }
       }
