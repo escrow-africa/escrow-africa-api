@@ -2,7 +2,9 @@
   "name": "@org/source",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {},
+  "scripts": {
+    "build:auth": "npx nest build auth-service"
+  },
   "private": true,
   "devDependencies": {
     "@eslint/js": "^9.8.0",
