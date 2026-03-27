@@ -26,3 +26,38 @@ model Otp {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model Dispute {
+  id           String        @id @default(uuid())
+  escrowId     String
+  raisedBy     String
+  reason       String
+  status       DisputeStatus @default(OPEN)
+  resolution   String?
+  resolvedBy   String?
+  resolvedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  REJECTED
+}
+
+model Admin {
+  id        String      @id @default(uuid())
+  fullName  String
+  email     String      @unique
+  password  String
+  role      AdminRole   @default(ADMIN)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+}
