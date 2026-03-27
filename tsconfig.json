@@ -4,31 +4,16 @@
   "files": [],
   "references": [
     {
-      "path": "./apps/api-gateway-e2e"
-    },
-    {
       "path": "./apps/api-gateway"
-    },
-    {
-      "path": "./apps/wallet-service-e2e"
     },
     {
       "path": "./apps/wallet-service"
     },
     {
-      "path": "./apps/escrow-service-e2e"
-    },
-    {
       "path": "./apps/escrow-service"
     },
     {
-      "path": "./apps/auth-service-e2e"
-    },
-    {
       "path": "./apps/auth-service"
-    },
-    {
-      "path": "./apps/notification-service-e2e"
     },
     {
       "path": "./apps/notification-service"
