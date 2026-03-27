@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "build:auth": "npx nest build auth-service"
+    "build:auth": "npx nest build auth-service && ls"
   },
   "private": true,
   "devDependencies": {
