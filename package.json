@@ -3,7 +3,11 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "build:auth": "npx nx build auth-service"
+    "build:auth": "npx nx build auth-service",
+    "build:dispute": "npx nx build dispute-service",
+    "build:escrow": "npx nx build escrow-service",
+    "build:notification": "npx nx build notification-service",
+    "build:wallet": "npx nx build wallet-service"
   },
   "private": true,
   "devDependencies": {
