@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
+    "build:gateway": "npx nx build api-gateway",
     "build:auth": "npx nx build auth-service",
     "build:dispute": "npx nx build dispute-service",
     "build:escrow": "npx nx build escrow-service",
