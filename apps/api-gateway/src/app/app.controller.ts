@@ -3,10 +3,9 @@ import axios from 'axios';
 
 @Controller()
 export class AppController {
-
-  @All('auth/*')
+  @All('auth/*path')
   async authProxy(@Req() req: any, @Res() res: any) {
-    const url = `${process.env.AUTH_API_URL}/${req.url}`;
+    const url = `${process.env.AUTH_API_URL}${req.url}`;
 
     const response = await axios({
       method: req.method,
@@ -18,9 +17,9 @@ export class AppController {
     return res.status(response.status).send(response.data);
   }
 
-  @All('dispute/*')
+  @All('dispute/*path')
   async escrowProxy(@Req() req: any, @Res() res: any) {
-    const url = `${process.env.DISPUTE_API_URL}/${req.url}`;
+    const url = `${process.env.DISPUTE_API_URL}${req.url}`;
 
     const response = await axios({
       method: req.method,
@@ -31,5 +30,4 @@ export class AppController {
 
     return res.status(response.status).send(response.data);
   }
-
 }
