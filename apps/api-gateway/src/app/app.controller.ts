@@ -6,7 +6,7 @@ export class AppController {
 
   @All('auth/*')
   async authProxy(@Req() req: any, @Res() res: any) {
-    const url = `https://auth-service.onrender.com/${req.url}`;
+    const url = `${process.env.AUTH_API_URL}/${req.url}`;
 
     const response = await axios({
       method: req.method,
@@ -18,9 +18,9 @@ export class AppController {
     return res.status(response.status).send(response.data);
   }
 
-  @All('escrow/*')
+  @All('dispute/*')
   async escrowProxy(@Req() req: any, @Res() res: any) {
-    const url = `https://escrow-service.onrender.com/${req.url}`;
+    const url = `${process.env.DISPUTE_API_URL}/${req.url}`;
 
     const response = await axios({
       method: req.method,
