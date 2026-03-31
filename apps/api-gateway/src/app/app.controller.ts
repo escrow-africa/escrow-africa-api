@@ -5,7 +5,7 @@ import axios from 'axios';
 export class AppController {
   @All('auth/*path')
   async authProxy(@Req() req: any, @Res() res: any) {
-    const url = `${process.env.AUTH_API_URL}/${req.url}`;
+    const url = `${process.env.AUTH_API_URL}${req.url}`;
 
     const response = await axios({
       method: req.method,
@@ -19,7 +19,7 @@ export class AppController {
 
   @All('dispute/*path')
   async escrowProxy(@Req() req: any, @Res() res: any) {
-    const url = `${process.env.DISPUTE_API_URL}/${req.url}`;
+    const url = `${process.env.DISPUTE_API_URL}${req.url}`;
 
     const response = await axios({
       method: req.method,
