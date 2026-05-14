@@ -61,3 +61,69 @@ enum AdminRole {
   SUPER_ADMIN
   ADMIN
 }
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  balance   Decimal  @default(0)
+  currency  String   @default("NGN")
+  accountNumber String?
+  accountName   String?
+  bankName      String?
+  bankCode      String?
+  providerAccountReference String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Escrow {
+  id                    String   @id @default(uuid())
+  escrowCode            String   @unique
+  buyerId               String
+  sellerId              String
+  amount                Float
+  milestones            String[]
+  deliveryDeadline      DateTime
+  inspectionPeriodDays  Int
+  description           String?
+  paymentReference      String
+  paymentLink           String
+  status                EscrowStatus @default(CREATED)
+  createdAt             DateTime @default(now())
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  provider          String
+  providerReference String        @unique
+  userId            String
+  amount            Decimal
+  referenceId       String?
+  fee               Decimal?
+  method            String?
+  type              String?
+  metadata          Json?
+  status            PaymentStatus @default(PENDING)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum EscrowStatus {
+  CREATED
+  PENDING_PAYMENT
+  FUNDED
+  IN_PROGRESS
+  DELIVERED
+  UNDER_REVIEW
+  COMPLETED
+  DISPUTED
+  CANCELLED
+  REFUNDED
+  EXPIRED
+}

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import axios from 'axios';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -47,6 +48,7 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
+    console.log({ registerDto });
     const { fullName, email, phone, whatsappPhone, password } = registerDto;
 
     const isExisting = await this.userService.findOne(email);
@@ -63,8 +65,22 @@ export class AuthService {
       password,
     });
 
+    // create a wallet for the user by calling the wallet service
+      const baseUrl = process.env.WALLET_API_URL || process.env.API_BASE_URL || '';
+      try {
+        const normalized = String(baseUrl).replace(/\/+$/, '');
+        const walletUrl = `${normalized}/api/wallet/create`;
+        console.log({ walletUrl });
+        // Request wallet creation with provider (strict) - fail registration if provider creation fails
+        await axios.post(walletUrl, { userId: user.id });
+    } catch (err) {
+      // don't block registration if wallet creation fails; log and continue
+      console.warn('Wallet creation failed for user', user.id, (err as any)?.message || err);
+    }
+
     return {
       message: 'Registration successful',
+      userId: user.id,
       accessToken: this.generateAccessToken(user.id, user.email),
     };
   }

@@ -3,12 +3,21 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "build:gateway": "npx nx build api-gateway",
-    "build:auth": "npx nx build auth-service",
-    "build:dispute": "npx nx build dispute-service",
-    "build:escrow": "npx nx build escrow-service",
-    "build:notification": "npx nx build notification-service",
-    "build:wallet": "npx nx build wallet-service"
+    "start:gateway": "node dist/apps/api-gateway/main.js",
+    "start:auth": "node dist/apps/auth-service/main.js",
+    "start:dispute": "node dist/apps/dispute-service/main.js",
+    "start:escrow": "node dist/apps/escrow-service/main.js",
+    "start:notification": "node dist/apps/notification-service/main.js",
+    "start:wallet": "node dist/apps/wallet-service/main.js",
+    "start:all": "concurrently -k -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API \"npm run start:auth\" \"npm run start:dispute\" \"npm run start:escrow\" \"npm run start:notification\" \"npm run start:wallet\" \"npm run start:gateway\"",
+
+    "serve:api": "cross-env NODE_OPTIONS= npx nx serve api-gateway",
+    "serve:auth": "cross-env NODE_OPTIONS= PORT=3001 npx nx serve auth-service",
+    "serve:dispute": "cross-env NODE_OPTIONS= PORT=3002 npx nx serve dispute-service",
+    "serve:escrow": "cross-env NODE_OPTIONS= PORT=3003 npx nx serve escrow-service",
+    "serve:notification": "cross-env NODE_OPTIONS= PORT=3004 npx nx serve notification-service",
+    "serve:wallet": "cross-env NODE_OPTIONS= PORT=3005 npx nx serve wallet-service",
+    "serve:all": "concurrently -k -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API \"npm run serve:auth\" \"npm run serve:dispute\" \"npm run serve:escrow\" \"npm run serve:notification\" \"npm run serve:wallet\" \"npm run serve:api\""
   },
   "private": true,
   "devDependencies": {
@@ -23,7 +32,7 @@
     "@nx/node": "22.5.3",
     "@nx/web": "22.5.3",
     "@nx/webpack": "22.5.3",
-    "@prisma/client": "^7.5.0",
+    "@prisma/client": "^7.7.0",
     "@swc-node/register": "1.11.1",
     "@swc/core": "1.15.8",
     "@swc/helpers": "0.5.18",
@@ -32,16 +41,19 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/passport-local": "^1.0.38",
     "@types/pg": "^8.18.0",
+    "@types/uuid": "^10.0.0",
     "eslint": "^9.8.0",
     "eslint-config-prettier": "^10.0.0",
     "jsonc-eslint-parser": "^2.1.0",
     "nx": "22.5.1",
     "prettier": "^2.6.2",
-    "prisma": "^7.5.0",
+    "prisma": "^7.7.0",
     "tslib": "^2.3.0",
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.40.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "concurrently": "^8.2.0",
+    "cross-env": "^7.0.3"
   },
   "workspaces": [
     "packages/*",
@@ -55,7 +67,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/mapped-types": "*",
-    "@nestjs/microservices": "^11.1.17",
+    "@nestjs/microservices": "^11.1.18",
     "@nestjs/mongoose": "^11.0.4",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.0",
@@ -72,6 +84,9 @@
     "passport-local": "^1.0.0",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.1.13",
-    "rxjs": "^7.8.0"
+    "rxjs": "^7.8.0",
+    "uuid": "^9.0.0"
+    ,
+    "http-proxy-middleware": "^2.0.6"
   }
 }
