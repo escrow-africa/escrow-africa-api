@@ -3,7 +3,7 @@
  * This is only a minimal backend to get started.
  */
 
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app/app.module';
 import { createProxyMiddleware } from 'http-proxy-middleware';
@@ -13,6 +13,13 @@ async function bootstrap() {
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
   app.enableCors();
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  );
   // Configure service base URLs centrally and expose to controllers via Express locals
   const server: any = app.getHttpAdapter().getInstance();
   const serviceBases = {
@@ -41,9 +48,14 @@ async function bootstrap() {
         ws: true,
         logLevel: 'warn',
         pathRewrite: shouldStripApi ? { [`^/${globalPrefix}`]: '' } : undefined,
-        onProxyReq(proxyReq, req, res) {
+        onProxyReq(proxyReq, req) {
           // ensure host header points to target
           proxyReq.setHeader('host', new URL(String(target)).host);
+          // forward incoming Authorization header (if present) to downstream service
+          const auth = (req as any).headers?.authorization || (req as any).headers?.Authorization;
+          if (auth) {
+            proxyReq.setHeader('authorization', String(auth));
+          }
         },
       })
     );

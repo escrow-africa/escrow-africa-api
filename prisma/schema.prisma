@@ -77,12 +77,19 @@ model Wallet {
 }
 
 model Escrow {
-  id          String   @id @default(uuid())
-  buyerId     String
-  sellerId    String
-  amount      Decimal
-  status      String   // CREATED | FUNDED | RELEASED | REFUNDED
-  createdAt   DateTime @default(now())
+  id                    String   @id @default(uuid())
+  escrowCode            String   @unique
+  buyerId               String
+  sellerId              String
+  amount                Float
+  milestones            String[]
+  deliveryDeadline      DateTime
+  inspectionPeriodDays  Int
+  description           String?
+  paymentReference      String
+  paymentLink           String
+  status                EscrowStatus @default(CREATED)
+  createdAt             DateTime @default(now())
 }
 
 model Payment {
@@ -105,4 +112,18 @@ enum PaymentStatus {
   PENDING
   SUCCESS
   FAILED
+}
+
+enum EscrowStatus {
+  CREATED
+  PENDING_PAYMENT
+  FUNDED
+  IN_PROGRESS
+  DELIVERED
+  UNDER_REVIEW
+  COMPLETED
+  DISPUTED
+  CANCELLED
+  REFUNDED
+  EXPIRED
 }
