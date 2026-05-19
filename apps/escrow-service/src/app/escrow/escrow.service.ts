@@ -85,15 +85,11 @@ export class EscrowService {
 	}
 
 	private async generateEscrowCode() {
-		// simple sequential code: ESC-0001, ESC-0002, ...
 		const count = await this.prisma.escrow.count();
 		const next = count + 1;
 		return `ESC-${String(next).padStart(4, '0')}`;
 	}
 
-	/**
-	 * Extend an escrow delivery deadline.
-	 */
 	async extendDeadline(escrowId: string, newDeadline: string | Date) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) throw new NotFoundException('Escrow not found');
@@ -102,16 +98,11 @@ export class EscrowService {
 		return updated;
 	}
 
-	/**
-	 * Mark an escrow as completed. If it's still FUNDED, release funds then mark completed.
-	 */
 	async markCompleted(escrowId: string) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) throw new NotFoundException('Escrow not found');
 		if (escrow.status === 'FUNDED') {
-			// release funds first
 			await this.release(escrowId);
-			// ensure we fetch latest
 		}
 		if (escrow.status !== 'RELEASED' && escrow.status !== 'FUNDED') {
 			throw new BadRequestException('Escrow cannot be marked completed in its current state');
@@ -209,24 +200,56 @@ export class EscrowService {
 		return refunded;
 	}
 
-	async getActiveEscrows(userId?: string) {
-		const activeStatuses = ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'];
-		const where: any = { status: { in: activeStatuses } };
-		if (userId) {
-			where.OR = [{ buyerId: userId }, { sellerId: userId }];
-		}
-		return this.prisma.escrow.findMany({ where });
-	}
+	async getEscrows(
+    filter?: 'active' | 'completed' | 'disputed',
+    userId?: string
+  ) {
+    const statusMap = {
+      active: ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'],
+      completed: ['COMPLETED'],
+      disputed: ['DISPUTED', 'UNDER_REVIEW']
+    };
 
-	async getCompletedEscrows(userId?: string) {
-		const where: any = { status: 'COMPLETED' };
-		if (userId) where.OR = [{ buyerId: userId }, { sellerId: userId }];
-		return this.prisma.escrow.findMany({ where });
-	}
+    const where: any = {};
 
-	async getDisputedEscrows(userId?: string) {
-		const where: any = { status: { in: ['DISPUTED', 'UNDER_REVIEW'] } };
-		if (userId) where.OR = [{ buyerId: userId }, { sellerId: userId }];
-		return this.prisma.escrow.findMany({ where });
-	}
+    if (filter && statusMap[filter]) {
+      where.status = {
+        in: statusMap[filter]
+      };
+    }
+
+    if (userId) {
+      where.OR = [{ buyerId: userId }, { sellerId: userId }];
+    }
+
+    return this.prisma.escrow.findMany({
+      where
+    });
+  }
+
+  async getEscrowDetails(escrowId: string, userId?: string) {
+    const escrow = await this.prisma.escrow.findUnique({
+      where: { id: escrowId },
+    });
+
+    if (!escrow) {
+      throw new NotFoundException('Escrow not found');
+    }
+
+    if (userId) {
+      const isParticipant =
+        escrow.buyerId === userId || escrow.sellerId === userId;
+
+      if (!isParticipant) {
+        throw new BadRequestException('You do not have access to this escrow');
+      }
+    }
+
+    const isBuyer = userId ? escrow.buyerId === userId : false;
+
+    return {
+      ...escrow,
+      isBuyer,
+    };
+  }
 }
