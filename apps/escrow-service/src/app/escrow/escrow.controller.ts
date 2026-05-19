@@ -1,8 +1,7 @@
-import { Controller, Post, Body, Param, Req, BadRequestException, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Param, Req, BadRequestException, Get, Query } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { CreateEscrowDto } from './dto/create-escrow.dto';
 import { type Request } from 'express';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('escrow')
 export class EscrowController {
@@ -10,23 +9,8 @@ export class EscrowController {
 
   @Post('create')
   async create(@Body() dto: CreateEscrowDto, @Req() req: Request) {
-    let sellerId = (req as any).user?.id;
-    if (!sellerId) {
-      // fallback: try to decode Bearer token from Authorization header
-      const auth = (req as any).headers?.authorization || (req as any).headers?.Authorization;
-      if (auth && String(auth).startsWith('Bearer ')) {
-        const token = String(auth).slice('Bearer '.length);
-        try {
-          const parts = token.split('.');
-          if (parts.length === 3) {
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
-            sellerId = payload?.sub || payload?.id || payload?.userId;
-          }
-        } catch {
-          // ignore and fall through to error below
-        }
-      }
-    }
+    const sellerId = (req as any).user?.id;
+
     if (!sellerId) throw new BadRequestException('Authenticated seller id not found');
 
     return this.escrowService.createEscrowDetailed({
@@ -40,25 +24,19 @@ export class EscrowController {
     });
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get('active')
-  async active(@Req() req: Request) {
+  @Get()
+  async getEscrows(
+    @Req() req: Request,
+    @Query('filter') filter?: 'active' | 'completed' | 'disputed',
+  ) {
     const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
-    return this.escrowService.getActiveEscrows(userId);
+    return this.escrowService.getEscrows(filter, userId);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get('completed')
-  async completed(@Req() req: Request) {
+  @Get(':escrowId')
+  async getEscrowDetails(@Param('escrowId') escrowId: string, @Req() req: Request) {
     const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
-    return this.escrowService.getCompletedEscrows(userId);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('disputed')
-  async disputed(@Req() req: Request) {
-    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
-    return this.escrowService.getDisputedEscrows(userId);
+    return this.escrowService.getEscrowDetails(escrowId, userId);
   }
 
   @Post(':id/fund')
@@ -66,13 +44,11 @@ export class EscrowController {
     return this.escrowService.fund(id);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post(':id/extend')
   async extend(@Param('id') id: string, @Body('deliveryDeadline') deliveryDeadline: string) {
     return this.escrowService.extendDeadline(id, deliveryDeadline);
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post(':id/complete')
   async complete(@Param('id') id: string) {
     return this.escrowService.markCompleted(id);
