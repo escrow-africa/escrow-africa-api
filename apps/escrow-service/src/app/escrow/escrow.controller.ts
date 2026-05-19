@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Req, BadRequestException, Get, Query } from '@nestjs/common';
+import { Controller, Post, Body, Param, Req, BadRequestException, Get } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { CreateEscrowDto } from './dto/create-escrow.dto';
 import { type Request } from 'express';
@@ -9,8 +9,7 @@ export class EscrowController {
 
   @Post('create')
   async create(@Body() dto: CreateEscrowDto, @Req() req: Request) {
-    const sellerId = (req as any).user?.id;
-
+    let sellerId = (req as any).user?.id;
     if (!sellerId) throw new BadRequestException('Authenticated seller id not found');
 
     return this.escrowService.createEscrowDetailed({
@@ -24,19 +23,22 @@ export class EscrowController {
     });
   }
 
-  @Get()
-  async getEscrows(
-    @Req() req: Request,
-    @Query('filter') filter?: 'active' | 'completed' | 'disputed',
-  ) {
+  @Get('active')
+  async active(@Req() req: Request) {
     const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
-    return this.escrowService.getEscrows(filter, userId);
+    return this.escrowService.getActiveEscrows(userId);
   }
 
-  @Get(':escrowId')
-  async getEscrowDetails(@Param('escrowId') escrowId: string, @Req() req: Request) {
+  @Get('completed')
+  async completed(@Req() req: Request) {
     const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
-    return this.escrowService.getEscrowDetails(escrowId, userId);
+    return this.escrowService.getCompletedEscrows(userId);
+  }
+
+  @Get('disputed')
+  async disputed(@Req() req: Request) {
+    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    return this.escrowService.getDisputedEscrows(userId);
   }
 
   @Post(':id/fund')
@@ -62,5 +64,11 @@ export class EscrowController {
   @Post(':id/refund')
   async refund(@Param('id') id: string) {
     return this.escrowService.refund(id);
+  }
+
+  @Get('stats')
+  getEscrowStats(@Req() req: Request) {
+    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    return this.escrowService.getEscrowStats(userId);
   }
 }
