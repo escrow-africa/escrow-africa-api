@@ -42,6 +42,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid password');
     }
 
+    if (!user.isEmailVerified) {
+      throw new UnauthorizedException('Email not verified');
+    }
+
     const { password: _, ...userWithoutPassword } = user;
 
     return userWithoutPassword;
@@ -49,7 +53,7 @@ export class AuthService {
 
   async register(registerDto: RegisterDto) {
     console.log({ registerDto });
-    const { fullName, email, phone, whatsappPhone, password } = registerDto;
+    const { fullName, email, phone, password } = registerDto;
 
     const isExisting = await this.userService.findOne(email);
 
@@ -61,9 +65,11 @@ export class AuthService {
       fullName,
       email,
       phone,
-      whatsappPhone,
       password,
     });
+
+    // create and store OTP for email verification
+    await this.otpService.create(email);
 
     // create a wallet for the user by calling the wallet service
       const baseUrl = process.env.WALLET_API_URL || process.env.API_BASE_URL || '';
@@ -79,9 +85,8 @@ export class AuthService {
     }
 
     return {
-      message: 'Registration successful',
+      message: 'Registration successful, OTP sent to email',
       userId: user.id,
-      accessToken: this.generateAccessToken(user.id, user.email),
     };
   }
 
@@ -125,9 +130,11 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
+    // mark user as verified
+    await this.userService.findByIdAndUpdate(user.id, { isEmailVerified: true });
+
     return {
       message: 'Email verified successfully',
-      accessToken: this.generateAccessToken(user.id, user.email),
     };
   }
 

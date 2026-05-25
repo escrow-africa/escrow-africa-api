@@ -11,8 +11,5 @@ export class RegisterDto {
   phone!: string;
 
   @IsNotEmpty()
-  whatsappPhone!: string;
-
-  @IsNotEmpty()
   password!: string;
 }
