@@ -1,16 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailerService } from '../common/mailer.service';
 
 @Injectable()
 export class OtpService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(OtpService.name);
+  constructor(private prisma: PrismaService, private mailer: MailerService) {}
 
   async create(email: string) {
     const otp = Math.floor(100000 + Math.random() * 900000);
     const otpExpiry = new Date();
     otpExpiry.setMinutes(otpExpiry.getMinutes() + 10);
 
-    return this.prisma.otp.create({
+    const record = await this.prisma.otp.create({
       data: {
         email,
         otp,
@@ -18,6 +20,14 @@ export class OtpService {
         isUsed: false,
       },
     });
+
+    try {
+      await this.mailer.sendOtpEmail(email, otp);
+    } catch (err) {
+      this.logger.warn('Failed to send OTP email, but OTP record was created');
+    }
+
+    return record;
   }
 
   async findLatestByEmail(email: string) {
