@@ -23,7 +23,7 @@ export class OtpService {
 
     try {
       await this.mailer.sendOtpEmail(email, otp);
-    } catch (err) {
+    } catch {
       this.logger.warn('Failed to send OTP email, but OTP record was created');
     }
 

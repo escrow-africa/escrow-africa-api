@@ -24,10 +24,6 @@ class CardDto {
 }
 
 export class TopUpDto {
-  @IsString()
-  @IsNotEmpty()
-  userId!: string;
-
   @IsNumber()
   amount!: number;
 
