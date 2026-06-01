@@ -1,9 +1,11 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, UseGuards } from '@nestjs/common';
+import { type Request } from 'express';
 import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
 import { CardOtpDto } from './dto/card-otp.dto';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
-
+@UseGuards(JwtAuthGuard)
 @Controller('wallet')
 export class WalletController {
   constructor(private readonly walletService: WalletService) {}
@@ -19,34 +21,40 @@ export class WalletController {
     return this.walletService.getBanks();
   }
 
-  @Get(':userId/balance')
-  async balance(@Param('userId') userId: string) {
+  @Get('balance')
+  async balance(@Req() req: Request) {
+    const userId = (req as any).user?.sub;
     return this.walletService.getBalance(userId);
   }
 
-  @Get(':userId')
-  async details(@Param('userId') userId: string) {
+  @Get('details')
+  async details(@Req() req: Request) {
+    const userId = (req as any).user?.sub;
     return this.walletService.getWalletDetails(userId);
   }
 
-  @Post(':userId/deposit')
-  async deposit(@Param('userId') userId: string, @Body('amount') amount: number) {
+  @Post('deposit')
+  async deposit(@Req() req: Request, @Body('amount') amount: number) {
+    const userId = (req as any).user?.sub;
     return this.walletService.deposit(userId, amount);
   }
 
-  @Post(':userId/credit')
-  async credit(@Param('userId') userId: string, @Body('amount') amount: number) {
+  @Post('credit')
+  async credit(@Req() req: Request, @Body('amount') amount: number) {
+    const userId = (req as any).user?.sub;
     return this.walletService.credit(userId, amount);
   }
 
-  @Post(':userId/debit')
-  async debit(@Param('userId') userId: string, @Body('amount') amount: number) {
+  @Post('debit')
+  async debit(@Req() req: Request, @Body('amount') amount: number) {
+    const userId = (req as any).user?.sub;
     return this.walletService.debit(userId, amount);
   }
 
   @Post('topup')
-  async topup(@Body() dto: TopUpDto) {
-    const { userId, amount, method, card, deviceInformation, skipProvider } = dto as any;
+  async topup(@Req() req: Request, @Body() dto: TopUpDto) {
+    const userId = (req as any).user?.sub;
+    const { amount, method, card, deviceInformation, skipProvider } = dto as any;
     return this.walletService.topUp(userId, amount, method, {card, deviceInformation, skipProvider });
   }
 

@@ -13,9 +13,11 @@ export class MailerService {
     const user = this.config.get<string>('MAIL_USER');
     const pass = this.config.get<string>('MAIL_PASS');
 
-    const transportOptions: any = host
-      ? { host, port, auth: { user, pass }, secure: port === 465 }
-      : { jsonTransport: true };
+    const transportOptions: any = {
+      host,
+      port,
+      auth: { user, pass },
+    };
 
     this.transporter = nodemailer.createTransport(transportOptions);
   }

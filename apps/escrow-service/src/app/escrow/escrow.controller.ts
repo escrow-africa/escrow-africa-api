@@ -1,15 +1,17 @@
-import { Controller, Post, Body, Param, Req, BadRequestException, Get } from '@nestjs/common';
+import { Controller, Post, Body, Param, Req, BadRequestException, Get, UseGuards } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { CreateEscrowDto } from './dto/create-escrow.dto';
 import { type Request } from 'express';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('escrow')
 export class EscrowController {
   constructor(private readonly escrowService: EscrowService) {}
 
   @Post('create')
   async create(@Body() dto: CreateEscrowDto, @Req() req: Request) {
-    let sellerId = (req as any).user?.id;
+    const sellerId = (req as any).user?.sub;
     if (!sellerId) throw new BadRequestException('Authenticated seller id not found');
 
     return this.escrowService.createEscrowDetailed({
@@ -25,19 +27,19 @@ export class EscrowController {
 
   @Get('active')
   async active(@Req() req: Request) {
-    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    const userId = (req as any).user?.sub;
     return this.escrowService.getActiveEscrows(userId);
   }
 
   @Get('completed')
   async completed(@Req() req: Request) {
-    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    const userId = (req as any).user?.sub;
     return this.escrowService.getCompletedEscrows(userId);
   }
 
   @Get('disputed')
   async disputed(@Req() req: Request) {
-    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    const userId = (req as any).user?.sub;
     return this.escrowService.getDisputedEscrows(userId);
   }
 
@@ -68,7 +70,7 @@ export class EscrowController {
 
   @Get('stats')
   getEscrowStats(@Req() req: Request) {
-    const userId = (req as any).user?.sub || (req as any).user?.id || (req as any).user?.userId;
+    const userId = (req as any).user?.sub;
     return this.escrowService.getEscrowStats(userId);
   }
 }

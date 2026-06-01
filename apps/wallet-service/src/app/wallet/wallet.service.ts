@@ -18,7 +18,6 @@ export class WalletService {
 
 		// initialize transaction with provider
 		const init = await this.monnify.initializeTransaction(userId, amount, customer);
-    console.log({ reference: init.providerResponse.responseBody });
 
 		const transactionReference = init.providerResponse.responseBody.transactionReference;
 

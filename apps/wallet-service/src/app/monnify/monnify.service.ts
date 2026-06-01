@@ -14,7 +14,7 @@ export class MonnifyService {
     for (let i = 0; i < attempts; i++) {
       try {
         return await fn();
-      } catch (e) {
+      } catch (e: any) {
         lastErr = e;
         const wait = baseDelayMs * Math.pow(2, i);
         this.logger.warn(`Monnify call failed (attempt ${i + 1}/${attempts}), retrying in ${wait}ms`, e?.response?.data || e?.message || e);
@@ -252,8 +252,6 @@ export class MonnifyService {
       customerEmail: customer?.email,
       getAllAvailableBanks: false,
     };
-
-    console.log('Creating Monnify reserved account with payload', payload);
 
     Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 

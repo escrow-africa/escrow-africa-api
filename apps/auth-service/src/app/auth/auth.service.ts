@@ -52,7 +52,6 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
-    console.log({ registerDto });
     const { fullName, email, phone, password } = registerDto;
 
     const isExisting = await this.userService.findOne(email);
@@ -76,7 +75,6 @@ export class AuthService {
       try {
         const normalized = String(baseUrl).replace(/\/+$/, '');
         const walletUrl = `${normalized}/api/wallet/create`;
-        console.log({ walletUrl });
         // Request wallet creation with provider (strict) - fail registration if provider creation fails
         await axios.post(walletUrl, { userId: user.id });
     } catch (err) {
