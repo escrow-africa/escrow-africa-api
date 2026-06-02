@@ -1,11 +1,16 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MonnifyService } from '../monnify/monnify.service';
+import { TransactionService } from '../transaction/transaction.service';
 
 @Injectable()
 export class WalletService {
 	private readonly logger = new Logger(WalletService.name);
-	constructor(private readonly prisma: PrismaService, private readonly monnify: MonnifyService) {}
+	constructor(
+		private readonly prisma: PrismaService,
+		private readonly monnify: MonnifyService,
+		private readonly transactionService: TransactionService,
+	) {}
 
 	async topUp(userId: string, amount: number, method: 'bank' | 'ussd' | 'card', opts: any = {}) {
 		if (amount <= 0) throw new BadRequestException('Amount must be positive');
@@ -168,18 +173,36 @@ export class WalletService {
 		return { wallet, payments };
 	}
 
-	async credit(userId: string, amount: number) {
+	async credit(userId: string, amount: number, opts: { title?: string; type?: 'DEPOSIT' | 'WITHDRAWAL' | 'PAYOUT'; metadata?: any } = {}) {
 		if (amount <= 0) {
 			throw new BadRequestException('Amount must be positive');
 		}
 		const wallet = await this.createWalletForUser(userId);
-		return this.prisma.wallet.update({
+		const updated = await this.prisma.wallet.update({
 			where: { id: wallet.id },
 			data: { balance: { increment: amount } as any },
 		});
+
+		// create transaction record for credit
+		try {
+			await this.prisma.transaction.create({
+				data: {
+					userId,
+					type: opts.type || 'DEPOSIT',
+					title: opts.title || `Deposit to wallet`,
+					amount: amount as any,
+					status: 'COMPLETED',
+					metadata: opts.metadata || {},
+				},
+			});
+		} catch (e) {
+			this.logger.warn('Failed to create transaction record for credit', e);
+		}
+
+		return updated;
 	}
 
-	async debit(userId: string, amount: number) {
+	async debit(userId: string, amount: number, opts: { title?: string; type?: 'DEPOSIT' | 'WITHDRAWAL' | 'PAYOUT'; metadata?: any } = {}) {
 		if (amount <= 0) {
 			throw new BadRequestException('Amount must be positive');
 		}
@@ -190,10 +213,29 @@ export class WalletService {
 		if (Number(wallet.balance) < amount) {
 			throw new BadRequestException('Insufficient funds');
 		}
-		return this.prisma.wallet.update({
+
+		const updated = await this.prisma.wallet.update({
 			where: { id: wallet.id },
 			data: { balance: { decrement: amount } as any },
 		});
+
+		// create transaction record for debit/payout
+		try {
+			await this.prisma.transaction.create({
+				data: {
+					userId,
+					type: opts.type || 'WITHDRAWAL',
+					title: opts.title || `Withdrawal from wallet`,
+					amount: amount as any,
+					status: 'COMPLETED',
+					metadata: opts.metadata || {},
+				},
+			});
+		} catch (e) {
+			this.logger.warn('Failed to create transaction record for debit', e);
+		}
+
+		return updated;
 	}
 
 	async deposit(userId: string, amount: number) {
@@ -239,8 +281,12 @@ export class WalletService {
 					},
 				});
 
-		// credit the wallet
-		await this.credit(userId, amount);
+		// credit the wallet and create transaction record via credit()
+		await this.credit(userId, amount, { title: `Deposit via ${provider}`, type: 'DEPOSIT', metadata: { providerReference } });
 		return payment;
+	}
+
+	async fetchTransactions(userId: string, page = 1, limit = 20, type?: string) {
+		return this.transactionService.fetchTransactions(userId, page, limit, type);
 	}
 }
