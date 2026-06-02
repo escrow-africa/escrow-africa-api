@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientProxy } from '@nestjs/microservices';
+import axios from 'axios';
 
 import { KafkaEvents } from '@org/kafka';
 
@@ -12,6 +13,65 @@ export class EscrowService {
 	) {}
 
 	private FEE_RATE = 0.015;
+
+	private readonly logger = new Logger(EscrowService.name);
+
+	private async getMonnifyAccessToken(): Promise<string> {
+		const base = process.env.MONNIFY_BASE_URL;
+		const apiKey = process.env.MONNIFY_API_KEY;
+		const secret = process.env.MONNIFY_SECRET_KEY;
+		if (!base || !apiKey || !secret) throw new Error('Monnify not configured');
+		const url = `${base}/auth/login`;
+		const encoded = Buffer.from(`${apiKey}:${secret}`).toString('base64');
+		this.logger.debug('Requesting Monnify access token', { url });
+		const resp = await axios.post(url, {}, { headers: { Authorization: `Basic ${encoded}`, 'Content-Type': 'application/json' } });
+		const data = resp.data;
+		return data?.responseBody?.accessToken || data?.response?.accessToken;
+	}
+
+	private async transferToCompanyFromUserReservedAccount(userAccountNumber: string, amount: number, metadata?: any) {
+		// company account details from env
+		const companyAccount = process.env.COMPANY_ACCOUNT_NUMBER;
+		const companyBankCode = process.env.COMPANY_BANK_CODE;
+		const companyAccountName = process.env.COMPANY_ACCOUNT_NAME || process.env.COMPANY_ACCOUNT_NUMBER;
+		if (!companyAccount || !companyBankCode) throw new Error('Company bank account not configured');
+
+		const token = await this.getMonnifyAccessToken();
+		const base = process.env.MONNIFY_BASE_URL!;
+		// Monnify transfer endpoint (best-effort). Payload may vary by Monnify version.
+		const url = `${base}/merchant/bank-transfer/transfer`;
+		const payload: any = {
+			amount,
+			senderAccountNumber: userAccountNumber,
+			beneficiaryAccountNumber: companyAccount,
+			beneficiaryBankCode: companyBankCode,
+			beneficiaryName: companyAccountName,
+			narration: `Escrow fee transfer`,
+			contractCode: process.env.MONNIFY_CONTRACT_CODE,
+			metadata: metadata || {},
+		};
+		this.logger.debug('Initiating Monnify transfer to company', { url, senderAccountNumber: userAccountNumber, amount });
+		const resp = await axios.post(url, payload, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+		return resp.data;
+	}
+
+	private async transferBetweenMonnifyAccounts(senderAccountNumber: string, beneficiaryAccountNumber: string, beneficiaryBankCode: string, amount: number, narration = 'Escrow transfer') {
+		const token = await this.getMonnifyAccessToken();
+		const base = process.env.MONNIFY_BASE_URL!;
+		const url = `${base}/merchant/bank-transfer/transfer`;
+		const payload: any = {
+			amount,
+			senderAccountNumber,
+			beneficiaryAccountNumber,
+			beneficiaryBankCode,
+			beneficiaryName: beneficiaryAccountNumber,
+			narration,
+			contractCode: process.env.MONNIFY_CONTRACT_CODE,
+		};
+		this.logger.debug('Initiating Monnify account-to-account transfer', { url, senderAccountNumber, beneficiaryAccountNumber, amount });
+		const resp = await axios.post(url, payload, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+		return resp.data;
+	}
 
 	async findUserIdByEmail(email: string) {
 		if (!email) throw new BadRequestException('Email required');
@@ -91,9 +151,6 @@ export class EscrowService {
 		return `ESC-${String(next).padStart(4, '0')}`;
 	}
 
-	/**
-	 * Extend an escrow delivery deadline.
-	 */
 	async extendDeadline(escrowId: string, newDeadline: string | Date) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) throw new NotFoundException('Escrow not found');
@@ -102,9 +159,6 @@ export class EscrowService {
 		return updated;
 	}
 
-	/**
-	 * Mark an escrow as completed. If it's still FUNDED, release funds then mark completed.
-	 */
 	async markCompleted(escrowId: string) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) throw new NotFoundException('Escrow not found');
@@ -149,35 +203,86 @@ export class EscrowService {
 
 	async release(escrowId: string) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
-    if (!escrow) {
-      throw new NotFoundException('Escrow not found');
-    }
-    if (escrow.status !== 'FUNDED') {
-      throw new BadRequestException('Escrow not funded');
-    }
+		if (!escrow) {
+		throw new NotFoundException('Escrow not found');
+		}
+		if (escrow.status !== 'FUNDED') {
+		throw new BadRequestException('Escrow not funded');
+		}
 
 		// compute fee and seller payout
 		const amount = Number(escrow.amount);
 		const fee = Number((amount * this.FEE_RATE).toFixed(2));
 		const sellerPayout = Number((amount - fee).toFixed(2));
 
-		// credit seller with amount minus fee
+		// credit seller locally (canonical ledger) then attempt provider transfers
 		const sellerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.sellerId } });
-
 		if (!sellerWallet) {
 			await this.prisma.wallet.create({ data: { userId: escrow.sellerId, balance: sellerPayout } as any });
 		} else {
 			await this.prisma.wallet.update({ where: { id: sellerWallet.id }, data: { balance: { increment: sellerPayout } as any } });
 		}
+		const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
+		const companyAccount = process.env.COMPANY_ACCOUNT_NUMBER;
+		const companyBankCode = process.env.COMPANY_BANK_CODE;
 
-		// credit company account if configured
-		const companyUserId = process.env.COMPANY_USER_ID;
-		if (companyUserId) {
-			const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
-			if (!companyWallet) {
-				await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
+		let sellerCreditedLocally = false;
+
+		try {
+			// determine sender account: prefer buyer's reserved account, fall back to ESCROW_HOLDING_ACCOUNT_NUMBER env
+			const senderAccount = buyerWallet?.accountNumber || process.env.ESCROW_HOLDING_ACCOUNT_NUMBER;
+			if (!senderAccount) throw new Error('No Monnify sender account available');
+
+			// transfer seller payout via Monnify if seller has reserved account
+			if (sellerWallet && sellerWallet.accountNumber && sellerWallet.bankCode) {
+				await this.transferBetweenMonnifyAccounts(String(senderAccount), String(sellerWallet.accountNumber), String(sellerWallet.bankCode), sellerPayout, `Escrow payout ${escrow.id}`);
+				this.logger.debug('Transferred seller payout via Monnify', { escrowId: escrow.id, sellerId: escrow.sellerId, amount: sellerPayout });
 			} else {
-				await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
+				// fallback to local wallet credit for seller
+				sellerCreditedLocally = true;
+				if (!sellerWallet) {
+					await this.prisma.wallet.create({ data: { userId: escrow.sellerId, balance: sellerPayout } as any });
+				} else {
+					await this.prisma.wallet.update({ where: { id: sellerWallet.id }, data: { balance: { increment: sellerPayout } as any } });
+				}
+				this.logger.debug('Credited seller locally (no Monnify account)', { sellerId: escrow.sellerId, amount: sellerPayout });
+			}
+
+			// transfer fee to company via Monnify if configured
+			if (companyAccount && companyBankCode) {
+				await this.transferBetweenMonnifyAccounts(String(senderAccount), String(companyAccount), String(companyBankCode), fee, `Escrow fee ${escrow.id}`);
+				this.logger.debug('Transferred company fee via Monnify', { escrowId: escrow.id, amount: fee });
+			} else {
+				this.logger.warn('Company bank account not configured for Monnify transfer; crediting local company wallet');
+				const companyUserId = process.env.COMPANY_USER_ID;
+				if (companyUserId) {
+					const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
+					if (!companyWallet) {
+						await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
+					} else {
+						await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
+					}
+				}
+			}
+		} catch (e: any) {
+			this.logger.error('Monnify transfer failed; falling back to local credits where necessary', e?.response?.data || e?.message || e);
+			// If seller wasn't credited locally yet, credit now
+			if (!sellerCreditedLocally) {
+				if (!sellerWallet) {
+					await this.prisma.wallet.create({ data: { userId: escrow.sellerId, balance: sellerPayout } as any });
+				} else {
+					await this.prisma.wallet.update({ where: { id: sellerWallet.id }, data: { balance: { increment: sellerPayout } as any } });
+				}
+			}
+			// ensure company local wallet credited as fallback
+			const companyUserId = process.env.COMPANY_USER_ID;
+			if (companyUserId) {
+				const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
+				if (!companyWallet) {
+					await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
+				} else {
+					await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
+				}
 			}
 		}
 
@@ -209,68 +314,106 @@ export class EscrowService {
 		return refunded;
 	}
 
-	async getActiveEscrows(userId?: string) {
-		const activeStatuses = ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'];
-		const where: any = { status: { in: activeStatuses } };
-		if (userId) {
-			where.OR = [{ buyerId: userId }, { sellerId: userId }];
+	async getEscrows(userId: string, preset: 'active' | 'completed' | 'disputed' | 'all' = 'active') {
+		const presets: Record<string, string[]> = {
+			active: ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'],
+			completed: ['COMPLETED'],
+			disputed: ['DISPUTED', 'UNDER_REVIEW'],
+		};
+		const where: any = {};
+		if (preset !== 'all') {
+			where.status = { in: presets[preset] || [] };
 		}
-		return this.prisma.escrow.findMany({ where });
-	}
-
-	async getCompletedEscrows(userId?: string) {
-		const where: any = { status: 'COMPLETED' };
 		if (userId) where.OR = [{ buyerId: userId }, { sellerId: userId }];
-		return this.prisma.escrow.findMany({ where });
+
+		const escrows = await this.prisma.escrow.findMany({ where });
+
+		// collect unique user ids
+		const userIds = new Set<string>();
+		escrows.forEach((e) => {
+			if (e.buyerId) userIds.add(e.buyerId);
+			if (e.sellerId) userIds.add(e.sellerId);
+		});
+
+		const users = await this.prisma.user.findMany({
+			where: { id: { in: Array.from(userIds) } },
+			select: { id: true, fullName: true, email: true },
+		});
+		const userMap = new Map(users.map((u) => [u.id, u]));
+
+		return escrows.map((escrow) => {
+			const buyer = userMap.get(escrow.buyerId) ? { id: escrow.buyerId, name: userMap.get(escrow.buyerId)!.fullName, email: userMap.get(escrow.buyerId)!.email } : null;
+			const seller = userMap.get(escrow.sellerId) ? { id: escrow.sellerId, name: userMap.get(escrow.sellerId)!.fullName, email: userMap.get(escrow.sellerId)!.email } : null;
+
+			if (userId) {
+				if (userId === escrow.sellerId) {
+					return { ...escrow, user: buyer };
+				}
+				if (userId === escrow.buyerId) {
+					return { ...escrow, user: seller };
+				}
+			}
+		});
 	}
 
-	async getDisputedEscrows(userId?: string) {
-		const where: any = { status: { in: ['DISPUTED', 'UNDER_REVIEW'] } };
-		if (userId) where.OR = [{ buyerId: userId }, { sellerId: userId }];
-		return this.prisma.escrow.findMany({ where });
+	async getEscrowById(escrowId: string, currentUserId?: string) {
+		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+		if (!escrow) throw new NotFoundException('Escrow not found');
+
+		const [buyer, seller] = await Promise.all([
+			this.prisma.user.findUnique({ where: { id: escrow.buyerId }, select: { id: true, fullName: true, email: true } }),
+			this.prisma.user.findUnique({ where: { id: escrow.sellerId }, select: { id: true, fullName: true, email: true } }),
+		]);
+
+		const buyerObj = buyer ? { id: buyer.id, name: buyer.fullName, email: buyer.email } : null;
+		const sellerObj = seller ? { id: seller.id, name: seller.fullName, email: seller.email } : null;
+
+		if (currentUserId) {
+			if (currentUserId === escrow.sellerId) return { ...escrow, buyer: buyerObj };
+			if (currentUserId === escrow.buyerId) return { ...escrow, seller: sellerObj };
+		}
+
+		return { ...escrow, buyer: buyerObj, seller: sellerObj };
 	}
 
-  async getEscrowStats(userId: string) {
-    const activeStatuses = [
-      'CREATED',
-      'PENDING_PAYMENT',
-      'FUNDED',
-      'IN_PROGRESS',
-      'DELIVERED',
-    ];
+	async getEscrowStats(userId: string) {
+		const activeStatuses = [
+			'CREATED',
+			'PENDING_PAYMENT',
+			'FUNDED',
+			'IN_PROGRESS',
+			'DELIVERED',
+		];
 
-    const activeEscrows = await this.prisma.escrow.findMany({
-      where: {
-        status: {
-          in: activeStatuses,
-        },
-        OR: [{ buyerId: userId }, { sellerId: userId }],
-      },
-      select: {
-        amount: true,
-        status: true,
-        buyerId: true,
-        sellerId: true,
-      },
-    });
+		const activeEscrows = await this.prisma.escrow.findMany({
+			where: {
+				status: {
+					in: activeStatuses,
+				},
+				OR: [{ buyerId: userId }, { sellerId: userId }],
+			},
+			select: {
+				amount: true,
+				status: true,
+				buyerId: true,
+				sellerId: true,
+			},
+		});
 
-    const totalActiveEscrowAmount = activeEscrows.reduce(
-      (sum, escrow) => sum + Number(escrow.amount),
-      0,
-    );
+		const totalActiveEscrowAmount = activeEscrows.reduce((sum, escrow) => sum + Number(escrow.amount), 0);
 
-    const pendingReleaseAmount = activeEscrows
-      .filter(
-        (escrow) =>
-          escrow.status === 'FUNDED' &&
-          escrow.sellerId === userId,
-      )
-      .reduce((sum, escrow) => sum + Number(escrow.amount), 0);
+		const pendingReleaseAmount = activeEscrows
+		.filter(
+			(escrow) =>
+			escrow.status === 'FUNDED' &&
+			escrow.sellerId === userId,
+		)
+		.reduce((sum, escrow) => sum + Number(escrow.amount), 0);
 
-    return {
-      totalActiveEscrowAmount,
-      pendingReleaseAmount,
-      activeEscrowCount: activeEscrows.length,
-    };
-  }
+		return {
+			totalActiveEscrowAmount,
+			pendingReleaseAmount,
+			activeEscrowCount: activeEscrows.length,
+		};
+	}
 }

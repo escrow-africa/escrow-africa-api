@@ -13,6 +13,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RegisterDto } from './dto/register.dto';
 import { UserService } from '../user/user.service';
 import { OtpService } from '../otp/otp.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +21,7 @@ export class AuthService {
     private userService: UserService,
     private otpService: OtpService,
     private jwtService: JwtService,
+    private readonly prisma: PrismaService,
   ) {}
 
   generateAccessToken(userId: string, email: string) {
@@ -153,5 +155,43 @@ export class AuthService {
       password: bcrypt.hashSync(newPassword, 10),
     });
     return { message: 'Password reset successful' };
+  }
+
+  async getUserDetails(userId: string) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    const { password: _, ...rest } = user as any;
+    return rest;
+  }
+
+  async getUserStats(userId: string) {
+    // availableBalance from wallet
+    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+    const availableBalance = wallet ? Number(wallet.balance) : 0;
+
+    // escrowHeldFunds: sum of escrows where user is buyer and status is FUNDED
+    const held = await this.prisma.escrow.aggregate({
+      _sum: { amount: true },
+      where: { buyerId: userId, status: 'FUNDED' },
+    });
+    const escrowHeldFunds = Number(held._sum.amount || 0);
+
+    // totalEarnings: sum of amounts for escrows where user is seller and status in RELEASED or COMPLETED
+    const earnings = await this.prisma.escrow.aggregate({
+      _sum: { amount: true },
+      where: { sellerId: userId, status: { in: ['RELEASED', 'COMPLETED'] } },
+    });
+    const totalEarnings = Number(earnings._sum.amount || 0);
+
+    // activeEscrows: count of escrows in active statuses for this user
+    const activeStatuses = ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'];
+    const activeEscrowsCount = await this.prisma.escrow.count({ where: { status: { in: activeStatuses }, OR: [{ buyerId: userId }, { sellerId: userId }] } });
+
+    return {
+      totalEarnings,
+      availableBalance,
+      escrowHeldFunds,
+      activeEscrows: activeEscrowsCount,
+    };
   }
 }
