@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Param, Req, BadRequestException, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Param, Req, BadRequestException, Get, UseGuards, Query } from '@nestjs/common';
 import { EscrowService } from './escrow.service';
 import { CreateEscrowDto } from './dto/create-escrow.dto';
 import { type Request } from 'express';
@@ -25,22 +25,22 @@ export class EscrowController {
     });
   }
 
-  @Get('active')
-  async active(@Req() req: Request) {
+  @Get()
+  async getEscrows(@Req() req: Request, @Query('preset') preset: 'active' | 'completed' | 'disputed' | 'all' = 'active') {
     const userId = (req as any).user?.sub;
-    return this.escrowService.getActiveEscrows(userId);
+    return this.escrowService.getEscrows(userId, preset);
   }
 
-  @Get('completed')
-  async completed(@Req() req: Request) {
+  @Get('stats')
+  getEscrowStats(@Req() req: Request) {
     const userId = (req as any).user?.sub;
-    return this.escrowService.getCompletedEscrows(userId);
+    return this.escrowService.getEscrowStats(userId);
   }
 
-  @Get('disputed')
-  async disputed(@Req() req: Request) {
+  @Get(':id')
+  async getOne(@Param('id') id: string, @Req() req: Request) {
     const userId = (req as any).user?.sub;
-    return this.escrowService.getDisputedEscrows(userId);
+    return this.escrowService.getEscrowById(id, userId);
   }
 
   @Post(':id/fund')
@@ -66,11 +66,5 @@ export class EscrowController {
   @Post(':id/refund')
   async refund(@Param('id') id: string) {
     return this.escrowService.refund(id);
-  }
-
-  @Get('stats')
-  getEscrowStats(@Req() req: Request) {
-    const userId = (req as any).user?.sub;
-    return this.escrowService.getEscrowStats(userId);
   }
 }

@@ -126,6 +126,7 @@ enum EscrowStatus {
   CANCELLED
   REFUNDED
   EXPIRED
+  RELEASED
 }
 
 enum TransactionType {

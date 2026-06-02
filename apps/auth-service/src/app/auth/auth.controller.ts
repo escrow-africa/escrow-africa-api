@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, UseGuards, Request } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards, Request, Get } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
@@ -42,5 +42,19 @@ export class AuthController {
     @Body() resetPasswordDto: ResetPasswordDto,
   ) {
     return this.authService.resetPassword(req.user, resetPasswordDto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  me(@Request() req: any) {
+    const userId = req.user?.sub;
+    return this.authService.getUserDetails(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('stats')
+  stats(@Request() req: any) {
+    const userId = req.user?.sub;
+    return this.authService.getUserStats(userId);
   }
 }
