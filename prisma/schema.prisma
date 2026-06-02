@@ -127,3 +127,29 @@ enum EscrowStatus {
   REFUNDED
   EXPIRED
 }
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  PAYOUT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Transaction {
+  id        String            @id @default(uuid())
+  userId    String
+  type      TransactionType
+  title     String
+  amount    Decimal
+  status    TransactionStatus @default(PENDING)
+  metadata  Json?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([userId])
+}

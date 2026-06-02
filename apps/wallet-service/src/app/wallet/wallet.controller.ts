@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, UseGuards, Query } from '@nestjs/common';
 import { type Request } from 'express';
 import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
@@ -62,5 +62,13 @@ export class WalletController {
   async cardOtp(@Body() dto: CardOtpDto) {
     const { transactionReference, tokenId, token } = dto as any;
     return this.walletService.authorizeCardOtp(transactionReference, tokenId, token);
+  }
+
+  @Get('transaction')
+  async transactions(@Req() req: Request, @Query('page') page = '1', @Query('limit') limit = '20', @Query('type') type?: string) {
+    const userId = (req as any).user?.sub;
+    const p = Number(page) || 1;
+    const l = Number(limit) || 20;
+    return this.walletService.fetchTransactions(userId, p, l, type);
   }
 }

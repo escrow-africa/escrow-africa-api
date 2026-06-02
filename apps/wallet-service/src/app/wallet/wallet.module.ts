@@ -4,9 +4,10 @@ import { WalletController } from './wallet.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { MonnifyModule } from '../monnify/monnify.module';
 import { MonnifyController } from '../monnify/monnify.controller';
+import { TransactionModule } from '../transaction/transaction.module';
 
 @Module({
-  imports: [PrismaModule, MonnifyModule],
+  imports: [PrismaModule, MonnifyModule, TransactionModule],
   controllers: [WalletController, MonnifyController],
   providers: [WalletService],
 })
