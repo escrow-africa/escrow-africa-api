@@ -47,14 +47,14 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Get('me')
   me(@Request() req: any) {
-    const userId = req.user?.sub;
+    const userId = req.user?.id;
     return this.authService.getUserDetails(userId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('stats')
   stats(@Request() req: any) {
-    const userId = req.user?.sub;
+    const userId = req.user?.id;
     return this.authService.getUserStats(userId);
   }
 }
