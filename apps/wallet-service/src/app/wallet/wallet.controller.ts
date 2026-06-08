@@ -4,6 +4,7 @@ import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
 import { CardOtpDto } from './dto/card-otp.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Public } from '../../decorators/public.decorator';
 
 @UseGuards(JwtAuthGuard)
 @Controller('wallet')
@@ -11,12 +12,14 @@ export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
   @Post('create')
+  @Public()
   async create(@Body() body: { userId: string; skipProvider?: boolean }) {
     const { userId, skipProvider } = body as any;
     return this.walletService.createWalletForUser(userId, !!skipProvider);
   }
 
   @Get('banks')
+  @Public()
   async banks() {
     return this.walletService.getBanks();
   }

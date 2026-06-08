@@ -73,13 +73,14 @@ export class AuthService {
     await this.otpService.create(email);
 
     // create a wallet for the user by calling the wallet service
-      const baseUrl = process.env.WALLET_API_URL || process.env.API_BASE_URL || '';
+      const baseUrl = process.env.API_BASE_URL;
       try {
         const normalized = String(baseUrl).replace(/\/+$/, '');
-        const walletUrl = `${normalized}/api/wallet/create`;
+        const walletUrl = `${normalized}/wallet/create`;
         // Request wallet creation with provider (strict) - fail registration if provider creation fails
         await axios.post(walletUrl, { userId: user.id });
     } catch (err) {
+      console.log({ err });
       // don't block registration if wallet creation fails; log and continue
       console.warn('Wallet creation failed for user', user.id, (err as any)?.message || err);
     }
@@ -165,7 +166,6 @@ export class AuthService {
   }
 
   async getUserStats(userId: string) {
-    // availableBalance from wallet
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
     const availableBalance = wallet ? Number(wallet.balance) : 0;
 
