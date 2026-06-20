@@ -25,6 +25,8 @@ model Otp {
   isUsed    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([email, createdAt(sort: Desc)])
 }
 
 model Dispute {
@@ -38,6 +40,8 @@ model Dispute {
   resolvedAt   DateTime?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+
+  @@index([escrowId])
 }
 
 enum DisputeStatus {
@@ -89,7 +93,16 @@ model Escrow {
   paymentReference      String
   paymentLink           String
   status                EscrowStatus @default(CREATED)
+  proofUrl              String?
+  deliveredAt           DateTime?
   createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@index([status])
+  @@index([buyerId, status])
+  @@index([sellerId, status])
 }
 
 model Payment {
@@ -106,6 +119,8 @@ model Payment {
   status            PaymentStatus @default(PENDING)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
 }
 
 enum PaymentStatus {
@@ -152,5 +167,5 @@ model Transaction {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
-  @@index([userId])
+  @@index([userId, createdAt(sort: Desc)])
 }

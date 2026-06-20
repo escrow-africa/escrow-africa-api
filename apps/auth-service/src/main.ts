@@ -16,10 +16,10 @@ async function bootstrap() {
   app.enableCors();
   // Increase body parser limits and handle aborted requests to reduce raw-body errors
   app.use(bodyParser.json({ limit: '10mb' }));
-  app.use(bodyParser.urlencoded({ limit: 'mb', extended: true }));
+  app.use(bodyParser.urlencoded({ limit: '10mb', extended: true }));
 
   // Log when client aborts the request to make debugging easier
-  app.use((req: any, _res: any, next: any) => {
+  app.use((_req: any, _res: any, next: any) => {
     app.useGlobalFilters(new AllExceptionsFilter());
     next();
   });

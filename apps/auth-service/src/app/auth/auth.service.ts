@@ -38,7 +38,7 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    const isPasswordCorrect = bcrypt.compareSync(password, user.password);
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
     if (!isPasswordCorrect) {
       throw new UnauthorizedException('Invalid password');
@@ -166,31 +166,27 @@ export class AuthService {
   }
 
   async getUserStats(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
-    const availableBalance = wallet ? Number(wallet.balance) : 0;
+    const activeStatuses = ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED', 'UNDER_REVIEW'] as any[];
 
-    // escrowHeldFunds: sum of escrows where user is buyer and status is FUNDED
-    const held = await this.prisma.escrow.aggregate({
-      _sum: { amount: true },
-      where: { buyerId: userId, status: 'FUNDED' },
-    });
-    const escrowHeldFunds = Number(held._sum.amount || 0);
-
-    // totalEarnings: sum of amounts for escrows where user is seller and status in RELEASED or COMPLETED
-    const earnings = await this.prisma.escrow.aggregate({
-      _sum: { amount: true },
-      where: { sellerId: userId, status: { in: ['RELEASED', 'COMPLETED'] } },
-    });
-    const totalEarnings = Number(earnings._sum.amount || 0);
-
-    // activeEscrows: count of escrows in active statuses for this user
-    const activeStatuses = ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'];
-    const activeEscrowsCount = await this.prisma.escrow.count({ where: { status: { in: activeStatuses }, OR: [{ buyerId: userId }, { sellerId: userId }] } });
+    const [wallet, held, earnings, activeEscrowsCount] = await Promise.all([
+      this.prisma.wallet.findUnique({ where: { userId } }),
+      this.prisma.escrow.aggregate({
+        _sum: { amount: true },
+        where: { buyerId: userId, status: { in: ['FUNDED', 'UNDER_REVIEW'] as any[] } },
+      }),
+      this.prisma.escrow.aggregate({
+        _sum: { amount: true },
+        where: { sellerId: userId, status: { in: ['RELEASED', 'COMPLETED'] as any[] } },
+      }),
+      this.prisma.escrow.count({
+        where: { status: { in: activeStatuses }, OR: [{ buyerId: userId }, { sellerId: userId }] },
+      }),
+    ]);
 
     return {
-      totalEarnings,
-      availableBalance,
-      escrowHeldFunds,
+      totalEarnings: Number(earnings._sum.amount || 0),
+      availableBalance: wallet ? Number(wallet.balance) : 0,
+      escrowHeldFunds: Number(held._sum.amount || 0),
       activeEscrows: activeEscrowsCount,
     };
   }
