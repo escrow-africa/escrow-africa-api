@@ -4,19 +4,27 @@ import { ClientProxy } from '@nestjs/microservices';
 import axios from 'axios';
 
 import { KafkaEvents } from '@org/kafka';
+import { CloudinaryService } from './cloudinary.service';
 
 @Injectable()
 export class EscrowService {
 	constructor(
 		private readonly prisma: PrismaService,
 		@Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientProxy,
+		private readonly cloudinaryService: CloudinaryService,
 	) {}
 
 	private FEE_RATE = 0.015;
 
 	private readonly logger = new Logger(EscrowService.name);
 
+	// In-memory Monnify token cache — avoids a round-trip on every transfer
+	private monnifyTokenCache: { token: string; expiresAt: number } | null = null;
+
 	private async getMonnifyAccessToken(): Promise<string> {
+		if (this.monnifyTokenCache && Date.now() < this.monnifyTokenCache.expiresAt) {
+			return this.monnifyTokenCache.token;
+		}
 		const base = process.env.MONNIFY_BASE_URL;
 		const apiKey = process.env.MONNIFY_API_KEY;
 		const secret = process.env.MONNIFY_SECRET_KEY;
@@ -26,7 +34,10 @@ export class EscrowService {
 		this.logger.debug('Requesting Monnify access token', { url });
 		const resp = await axios.post(url, {}, { headers: { Authorization: `Basic ${encoded}`, 'Content-Type': 'application/json' } });
 		const data = resp.data;
-		return data?.responseBody?.accessToken || data?.response?.accessToken;
+		const token = data?.responseBody?.accessToken || data?.response?.accessToken;
+		// Cache for 50 minutes (Monnify tokens are typically valid for 60 min)
+		this.monnifyTokenCache = { token, expiresAt: Date.now() + 50 * 60 * 1000 };
+		return token;
 	}
 
 	private async transferToCompanyFromUserReservedAccount(userAccountNumber: string, amount: number, metadata?: any) {
@@ -159,20 +170,78 @@ export class EscrowService {
 		return updated;
 	}
 
-	async markCompleted(escrowId: string) {
+	async markCompleted(escrowId: string, buyerId?: string) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) throw new NotFoundException('Escrow not found');
-		if (escrow.status === 'FUNDED') {
-			// release funds first
-			await this.release(escrowId);
-			// ensure we fetch latest
+
+		if (buyerId && escrow.buyerId !== buyerId) {
+			throw new BadRequestException('Only the buyer can mark as completed');
 		}
-		if (escrow.status !== 'RELEASED' && escrow.status !== 'FUNDED') {
+
+		const releasableStatuses = ['FUNDED', 'UNDER_REVIEW'];
+		if (!releasableStatuses.includes(escrow.status as string) && escrow.status !== 'RELEASED') {
 			throw new BadRequestException('Escrow cannot be marked completed in its current state');
 		}
+
+		if (releasableStatuses.includes(escrow.status as string)) {
+			// check buyer wallet balance before releasing
+			const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
+			if (!buyerWallet || Number(buyerWallet.balance) < Number(escrow.amount)) {
+				throw new BadRequestException('INSUFFICIENT_FUNDS');
+			}
+			await this.release(escrowId);
+		}
+
 		const updated = await this.prisma.escrow.update({ where: { id: escrowId }, data: { status: 'COMPLETED' } as any });
 		this.kafkaClient.emit(KafkaEvents.ESCROW_COMPLETED, { escrowId: updated.id, buyerId: updated.buyerId, sellerId: updated.sellerId });
 		return updated;
+	}
+
+	async deliver(escrowId: string, fileBuffer: Buffer, originalName: string, sellerId: string) {
+		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+		if (!escrow) throw new NotFoundException('Escrow not found');
+		if (escrow.sellerId !== sellerId) throw new BadRequestException('Only the seller can mark as delivered');
+		if (escrow.status !== 'FUNDED' && escrow.status !== 'IN_PROGRESS') {
+			throw new BadRequestException('Escrow must be FUNDED or IN_PROGRESS to mark as delivered');
+		}
+
+		const publicId = `escrow-${escrowId}-${Date.now()}`;
+		const proofUrl = await this.cloudinaryService.uploadBuffer(fileBuffer, {
+			folder: 'escrow-proofs',
+			resource_type: 'auto',
+			public_id: publicId,
+		});
+
+		const updated = await this.prisma.escrow.update({
+			where: { id: escrowId },
+			data: { status: 'UNDER_REVIEW', proofUrl, deliveredAt: new Date() } as any,
+		});
+
+		this.kafkaClient.emit(KafkaEvents.ESCROW_DELIVERED, {
+			escrowId: updated.id,
+			buyerId: updated.buyerId,
+			sellerId: updated.sellerId,
+			proofUrl,
+		});
+
+		return updated;
+	}
+
+	async nudgeBuyer(escrowId: string, sellerId: string) {
+		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+		if (!escrow) throw new NotFoundException('Escrow not found');
+		if (escrow.sellerId !== sellerId) throw new BadRequestException('Only the seller can nudge the buyer');
+		if (escrow.status !== 'UNDER_REVIEW') {
+			throw new BadRequestException('Escrow must be UNDER_REVIEW to nudge buyer');
+		}
+
+		this.kafkaClient.emit(KafkaEvents.ESCROW_NUDGE_BUYER, {
+			escrowId: escrow.id,
+			buyerId: escrow.buyerId,
+			sellerId: escrow.sellerId,
+		});
+
+		return { message: 'Buyer has been nudged' };
 	}
 
 	async fund(escrowId: string) {
@@ -180,8 +249,8 @@ export class EscrowService {
     if (!escrow) {
       throw new NotFoundException('Escrow not found');
     }
-    if (escrow.status !== 'CREATED') {
-      throw new BadRequestException('Escrow not in CREATED state');
+    if (escrow.status !== 'CREATED' && escrow.status !== 'PENDING_PAYMENT') {
+      throw new BadRequestException('Escrow cannot be funded in its current state');
     }
 
 		// debit buyer
@@ -206,8 +275,8 @@ export class EscrowService {
 		if (!escrow) {
 		throw new NotFoundException('Escrow not found');
 		}
-		if (escrow.status !== 'FUNDED') {
-		throw new BadRequestException('Escrow not funded');
+		if (escrow.status !== 'FUNDED' && escrow.status !== 'UNDER_REVIEW') {
+		throw new BadRequestException('Escrow must be FUNDED or UNDER_REVIEW to release');
 		}
 
 		// compute fee and seller payout
@@ -316,9 +385,9 @@ export class EscrowService {
 
 	async getEscrows(userId: string, preset: 'active' | 'completed' | 'disputed' | 'all' = 'active') {
 		const presets: Record<string, string[]> = {
-			active: ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED'],
-			completed: ['COMPLETED'],
-			disputed: ['DISPUTED', 'UNDER_REVIEW'],
+			active: ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED', 'UNDER_REVIEW'],
+			completed: ['COMPLETED', 'RELEASED'],
+			disputed: ['DISPUTED'],
 		};
 		const where: any = {};
 		if (preset !== 'all') {
@@ -383,6 +452,7 @@ export class EscrowService {
 			'FUNDED',
 			'IN_PROGRESS',
 			'DELIVERED',
+			'UNDER_REVIEW',
 		];
 
 		const activeEscrows = await this.prisma.escrow.findMany({
@@ -405,7 +475,7 @@ export class EscrowService {
 		const pendingReleaseAmount = activeEscrows
 		.filter(
 			(escrow) =>
-			escrow.status === 'FUNDED' &&
+			(escrow.status === 'FUNDED' || escrow.status === 'UNDER_REVIEW') &&
 			escrow.sellerId === userId,
 		)
 		.reduce((sum, escrow) => sum + Number(escrow.amount), 0);
