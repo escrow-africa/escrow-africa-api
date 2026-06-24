@@ -16,7 +16,13 @@
       "path": "./apps/auth-service"
     },
     {
+      "path": "./apps/dispute-service"
+    },
+    {
       "path": "./apps/notification-service"
+    },
+    {
+      "path": "./apps/advertisement-service"
     },
     {
       "path": "./libs/postgres"
@@ -32,9 +38,6 @@
     },
     {
       "path": "./libs/common"
-    },
-    {
-      "path": "./apps/dispute-service"
     }
   ]
 }

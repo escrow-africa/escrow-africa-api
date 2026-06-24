@@ -46,3 +46,7 @@ Thumbs.db
 /generated/prisma
 
 .env
+
+.claude/worktrees
+.nx/polygraph
+.nx/self-healing

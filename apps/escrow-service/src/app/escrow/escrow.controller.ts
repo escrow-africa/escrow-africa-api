@@ -60,7 +60,7 @@ export class EscrowController {
     const sellerId = (req as any).user?.sub;
     if (!sellerId) throw new BadRequestException('Authenticated seller id not found');
     if (!file) throw new BadRequestException('Proof file is required');
-    return this.escrowService.deliver(id, file.buffer, file.originalname, sellerId);
+    return this.escrowService.deliver(id, file.buffer, sellerId);
   }
 
   @Post(':id/nudge')
