@@ -9,6 +9,33 @@
     ],
     "sharedGlobals": []
   },
+  "targetDefaults": {
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "inputs": [
+        "production",
+        {
+          "dependentTasksOutputFiles": "**/*.{d.ts,d.cts,d.mts,tsbuildinfo}",
+          "transitive": true
+        },
+        {
+          "fileset": "{projectRoot}/**/*.{d.ts,d.cts,d.mts}"
+        }
+      ],
+      "outputs": ["{projectRoot}/tsconfig.tsbuildinfo"],
+      "cache": true
+    },
+    "serve": {
+      "configurations": {
+        "development": {
+          "buildTarget": "{projectName}:build:development"
+        },
+        "production": {
+          "buildTarget": "{projectName}:build:production"
+        }
+      }
+    }
+  },
   "plugins": [
     {
       "plugin": "@nx/js/typescript",
@@ -18,7 +45,7 @@
         },
         "build": {
           "targetName": "build",
-          "configName": "tsconfig.lib.json",
+          "configName": "tsconfig.app.json",
           "buildDepsName": "build-deps",
           "watchDepsName": "watch-deps"
         }
@@ -42,5 +69,6 @@
       }
     }
   ],
-  "neverConnectToCloud": true
+  "neverConnectToCloud": true,
+  "analytics": true
 }

@@ -26,15 +26,17 @@ export class WalletService {
 
 		const transactionReference = init.providerResponse.responseBody.transactionReference;
 
-		// persist pending payment
-		await this.prisma.payment.create({
+		// persist pending transaction (acts as payment record)
+		await this.prisma.transaction.create({
 			data: {
-				provider: 'MONNIFY',
-				providerReference: transactionReference,
 				userId,
+				type: 'DEPOSIT',
+				title: `Top-up initiated`,
 				amount: amount as any,
 				status: 'PENDING',
 				metadata: { method },
+				provider: 'MONNIFY',
+				providerReference: transactionReference,
 			},
 		});
 
@@ -45,8 +47,11 @@ export class WalletService {
 				const bankCode = wallet?.bankCode;
 				if (!bankCode) throw new BadRequestException('bankCode is required for bank/ussd payments');
 				const resp = await this.monnify.initBankPayment(transactionReference, bankCode);
-				// attach provider data to payment
-				await this.prisma.payment.update({ where: { providerReference: transactionReference }, data: { metadata: { ...resp.raw, method } } });
+				// attach provider data to transaction
+				const existingTxn = await this.prisma.transaction.findFirst({ where: { providerReference: transactionReference } });
+				if (existingTxn) {
+					await this.prisma.transaction.update({ where: { id: existingTxn.id }, data: { metadata: { ...resp.raw, method } } });
+				}
 				return { transactionReference, ...resp };
 			}
 			case 'card': {
@@ -54,7 +59,10 @@ export class WalletService {
 				const deviceInformation = opts.deviceInformation;
 				if (!card) throw new BadRequestException('card details required for card payments');
 				const resp = await this.monnify.chargeCard(transactionReference, card, deviceInformation);
-				await this.prisma.payment.update({ where: { providerReference: transactionReference }, data: { metadata: { ...resp.raw, method, tokenId: resp.tokenId } } });
+				const existingTxn2 = await this.prisma.transaction.findFirst({ where: { providerReference: transactionReference } });
+				if (existingTxn2) {
+					await this.prisma.transaction.update({ where: { id: existingTxn2.id }, data: { metadata: { ...resp.raw, method, tokenId: resp.tokenId } } });
+				}
 				return { transactionReference, ...resp };
 			}
 			default:
@@ -67,23 +75,23 @@ export class WalletService {
 		if (!tokenId || !token) throw new BadRequestException('tokenId and token are required');
 
 		const txRef = transactionReference;
-		let payment = null;
+		let txn = null;
 		if (txRef) {
-			payment = await this.prisma.payment.findUnique({ where: { providerReference: txRef } });
-			if (!payment) throw new NotFoundException('Payment not found for transactionReference');
+			txn = await this.prisma.transaction.findFirst({ where: { providerReference: txRef } });
+			if (!txn) throw new NotFoundException('Transaction not found for transactionReference');
 		}
 
 		const resp = await this.monnify.authorizeCardOtp(tokenId, token, txRef);
 		// persist provider response
-		if (txRef) {
-			await this.prisma.payment.update({ where: { providerReference: txRef }, data: { metadata: { ...(payment?.metadata || {}), ...(resp.raw || {}) } } });
+		if (txRef && txn) {
+			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...(txn?.metadata || {}), ...(resp.raw || {}) } } });
 		}
 
 		// if provider indicates success, credit wallet
 		const providerRef = resp.providerReference || txRef;
 		if (resp.status && String(resp.status).toUpperCase().includes('SUCCESS')) {
-			// find payment to get userId and amount
-			const p = txRef ? payment : await this.prisma.payment.findUnique({ where: { providerReference: providerRef } });
+			// find transaction to get userId and amount
+			const p = txRef ? txn : await this.prisma.transaction.findFirst({ where: { providerReference: providerRef } });
 			if (p) {
 				await this.processProviderPayment(providerRef, p.userId, Number(p.amount));
 			}
@@ -165,12 +173,12 @@ export class WalletService {
 			throw new NotFoundException('Wallet not found');
 		}
 
-		const payments = await this.prisma.payment.findMany({
+		const transactions = await this.prisma.transaction.findMany({
 			where: { userId },
 			orderBy: { createdAt: 'desc' },
 		});
 
-		return { wallet, payments };
+		return { wallet, payments: transactions };
 	}
 
 	async credit(userId: string, amount: number, opts: { title?: string; type?: 'DEPOSIT' | 'WITHDRAWAL' | 'PAYOUT'; metadata?: any } = {}) {
@@ -245,14 +253,16 @@ export class WalletService {
 		const customer = user ? { name: user.fullName, email: user.email } : { name: userId, email: `${userId}@example.com` };
 		const init = await this.monnify.initializeTransaction(userId, amount, customer);
 
-		// record a pending payment in DB to allow idempotent webhook handling
-		await this.prisma.payment.create({
+		// record a pending transaction in DB to allow idempotent webhook handling
+		await this.prisma.transaction.create({
 			data: {
-				provider: 'MONNIFY',
-				providerReference: init.paymentReference,
 				userId,
+				type: 'DEPOSIT',
+				title: `Deposit initiated`,
 				amount: amount as any,
 				status: 'PENDING',
+				provider: 'MONNIFY',
+				providerReference: init.paymentReference,
 			},
 		});
 
@@ -262,28 +272,30 @@ export class WalletService {
 	async processProviderPayment(providerReference: string, userId: string, amount: number, provider = 'MONNIFY') {
 		if (!providerReference) throw new BadRequestException('Missing provider reference');
 		// Check if payment already exists
-		const existing = await this.prisma.payment.findUnique({ where: { providerReference } });
-		if (existing && existing.status === 'SUCCESS') {
-			this.logger.debug('Payment already processed', providerReference);
+		const existing = await this.prisma.transaction.findFirst({ where: { providerReference } });
+		if (existing && existing.status === 'COMPLETED') {
+			this.logger.debug('Transaction already processed', providerReference);
 			return existing;
 		}
 
-		// create if missing
-		const payment = existing
-			? await this.prisma.payment.update({ where: { providerReference }, data: { status: 'SUCCESS', amount: amount as any } })
-			: await this.prisma.payment.create({
+		// create or update transaction record
+		const transaction = existing
+			? await this.prisma.transaction.update({ where: { id: existing.id }, data: { status: 'COMPLETED', amount: amount as any } })
+			: await this.prisma.transaction.create({
 					data: {
+						userId,
+						type: 'DEPOSIT',
+						title: `Deposit via ${provider}`,
+						amount: amount as any,
+						status: 'COMPLETED',
 						provider,
 						providerReference,
-						userId,
-						amount: amount as any,
-						status: 'SUCCESS',
 					},
 				});
 
-		// credit the wallet and create transaction record via credit()
+		// credit the wallet and create transaction record via credit() (credit() will also create an internal Transaction record)
 		await this.credit(userId, amount, { title: `Deposit via ${provider}`, type: 'DEPOSIT', metadata: { providerReference } });
-		return payment;
+		return transaction;
 	}
 
 	async fetchTransactions(userId: string, page = 1, limit = 20, type?: string) {
