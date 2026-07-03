@@ -16,21 +16,6 @@ CREATE TYPE "TransactionType" AS ENUM ('DEPOSIT', 'WITHDRAWAL', 'PAYOUT');
 -- CreateEnum
 CREATE TYPE "TransactionStatus" AS ENUM ('PENDING', 'COMPLETED', 'FAILED');
 
--- CreateEnum
-CREATE TYPE "PromotionPlacementSlot" AS ENUM ('TOP_VERIFICATION', 'PERSISTENT_FLOW', 'MAXIMUM_VISIBILITY');
-
--- CreateEnum
-CREATE TYPE "Industry" AS ENUM ('WEB_DEVELOPMENT', 'MOBILE_APPS', 'SOFTWARE_DEVELOPMENT', 'LOGO_DESIGN', 'BRAND_GUIDELINES', 'VIDEO_EDITING', 'SEO_MARKETING', 'OTHER');
-
--- CreateEnum
-CREATE TYPE "TargetAudience" AS ENUM ('ALL_VISITORS', 'TALENT_PROVIDERS', 'HIRING_MANAGERS');
-
--- CreateEnum
-CREATE TYPE "BadgeLabel" AS ENUM ('FEATURED', 'HOT_DEAL', 'TOP_RATED', 'OUT_OF_FUEL');
-
--- CreateEnum
-CREATE TYPE "AdStatus" AS ENUM ('ACTIVE', 'PAUSED', 'TERMINATED', 'DRAFT');
-
 -- CreateTable
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
@@ -166,34 +151,6 @@ CREATE TABLE "Transaction" (
     CONSTRAINT "Transaction_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "Advertisement" (
-    "id" TEXT NOT NULL,
-    "customId" TEXT NOT NULL,
-    "productTitle" TEXT NOT NULL,
-    "description" TEXT,
-    "basePrice" DECIMAL(65,30) NOT NULL,
-    "coverImage" TEXT,
-    "promotionPlacementSlot" "PromotionPlacementSlot" NOT NULL,
-    "industry" "Industry" NOT NULL,
-    "targetAudience" "TargetAudience" NOT NULL,
-    "startDate" TIMESTAMP(3) NOT NULL,
-    "endDate" TIMESTAMP(3) NOT NULL,
-    "billingDailyBudget" DECIMAL(65,30) NOT NULL,
-    "allocatedBudgetLimit" DECIMAL(65,30) NOT NULL,
-    "depositedAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
-    "badgeLabel" "BadgeLabel",
-    "presentationTheme" TEXT,
-    "status" "AdStatus" NOT NULL DEFAULT 'DRAFT',
-    "impressions" INTEGER NOT NULL DEFAULT 0,
-    "clicks" INTEGER NOT NULL DEFAULT 0,
-    "revenue" DECIMAL(65,30) NOT NULL DEFAULT 0,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "Advertisement_pkey" PRIMARY KEY ("id")
-);
-
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
@@ -235,6 +192,3 @@ CREATE INDEX "Payment_userId_createdAt_idx" ON "Payment"("userId", "createdAt" D
 
 -- CreateIndex
 CREATE INDEX "Transaction_userId_createdAt_idx" ON "Transaction"("userId", "createdAt" DESC);
-
--- CreateIndex
-CREATE UNIQUE INDEX "Advertisement_customId_key" ON "Advertisement"("customId");

@@ -22,9 +22,6 @@
       "path": "./apps/notification-service"
     },
     {
-      "path": "./apps/advertisement-service"
-    },
-    {
       "path": "./libs/postgres"
     },
     {
