@@ -9,8 +9,7 @@
     "start:escrow": "node apps/escrow-service/dist/main.js",
     "start:notification": "node apps/notification-service/dist/main.js",
     "start:wallet": "node apps/wallet-service/dist/main.js",
-    "start:advertisement": "node apps/advertisement-service/dist/main.js",
-    "start:all": "concurrently -k -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API,ADVERTISEMENT \"npm run start:auth\" \"npm run start:dispute\" \"npm run start:escrow\" \"npm run start:notification\" \"npm run start:wallet\" \"npm run start:gateway\" \"npm run start:advertisement\"",
+    "start:all": "concurrently -k -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API \"npm run start:auth\" \"npm run start:dispute\" \"npm run start:escrow\" \"npm run start:notification\" \"npm run start:wallet\" \"npm run start:gateway\"",
     "warm:graph": "npx nx daemon --start && cross-env NX_DAEMON=false npx nx show projects",
     "serve:api": "cross-env NODE_OPTIONS= npx nx serve api-gateway",
     "serve:auth": "cross-env NODE_OPTIONS= PORT=3001 npx nx serve auth-service",
@@ -18,8 +17,7 @@
     "serve:escrow": "cross-env NODE_OPTIONS= PORT=3003 npx nx serve escrow-service",
     "serve:notification": "cross-env NODE_OPTIONS= PORT=3004 npx nx serve notification-service",
     "serve:wallet": "cross-env NODE_OPTIONS= PORT=3005 npx nx serve wallet-service",
-    "serve:advertisement": "cross-env NODE_OPTIONS= PORT=3006 npx nx serve advertisement-service",
-    "serve:all": "npm run warm:graph && concurrently -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API,ADVERTISEMENT \"npm run serve:auth\" \"npm run serve:dispute\" \"npm run serve:escrow\" \"npm run serve:notification\" \"npm run serve:wallet\" \"npm run serve:api\" \"npm run serve:advertisement\""
+    "serve:all": "npm run warm:graph && concurrently -n AUTH,DISPUTE,ESCROW,NOTIFY,WALLET,API \"npm run serve:auth\" \"npm run serve:dispute\" \"npm run serve:escrow\" \"npm run serve:notification\" \"npm run serve:wallet\" \"npm run serve:api\""
   },
   "private": true,
   "devDependencies": {
