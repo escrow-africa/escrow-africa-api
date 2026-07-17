@@ -32,11 +32,14 @@ export class NotificationController {
 
   @EventPattern(KafkaEvents.ESCROW_CREATED)
   async handleEscrowCreated(@Payload() data: any) {
-    // notify buyer that an escrow was created by the seller
-    const to = data.buyerEmail || data.buyerId || 'user_email';
-    const text = `Escrow created: An escrow (${data.escrowId}) for ₦${data.amount} has been created by the seller. Please fund your wallet to proceed.`;
+    const isSellerCreator = data.creatorRole === 'SELLER';
+    const recipientEmail = isSellerCreator ? data.buyerEmail : data.sellerEmail;
+    const actor = isSellerCreator ? 'seller' : 'buyer';
+    const subject = 'Escrow created – action required';
+    const text = `Escrow created: An escrow (${data.escrowId}) for ₦${data.amount} has been created by the ${actor}. Please ${isSellerCreator ? 'fund your wallet to proceed' : 'review the escrow details and respond accordingly'}.`;
+
     try {
-      if (data.buyerEmail) await this.mailerService.sendMail(data.buyerEmail, 'Escrow created – action required', text);
+      if (recipientEmail) await this.mailerService.sendMail(recipientEmail, subject, text);
     } catch (e) {
       this.logger.warn('Failed to send escrow-created email', e?.message || e);
     }

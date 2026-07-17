@@ -1,10 +1,12 @@
 import { Controller, Post, Body, Param, Req, BadRequestException, Get, UseGuards, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { EventPattern, Payload } from '@nestjs/microservices';
 import { EscrowService } from './escrow.service';
 import { CreateEscrowDto } from './dto/create-escrow.dto';
 import { type Request } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { KafkaEvents } from '@org/kafka';
 
 @UseGuards(JwtAuthGuard)
 @Controller('escrow')
@@ -13,12 +15,16 @@ export class EscrowController {
 
   @Post('create')
   async create(@Body() dto: CreateEscrowDto, @Req() req: Request) {
-    const sellerId = (req as any).user?.sub;
-    if (!sellerId) throw new BadRequestException('Authenticated seller id not found');
+    const authUserId = (req as any).user?.sub;
+    const authUserEmail = (req as any).user?.email;
+    if (!authUserId) throw new BadRequestException('Authenticated user id not found');
 
     return this.escrowService.createEscrowDetailed({
+      creatorRole: dto.creatorRole,
+      authenticatedUserId: authUserId,
+      authenticatedUserEmail: authUserEmail,
       buyerEmail: dto.buyerEmail,
-      sellerId,
+      sellerEmail: dto.sellerEmail,
       milestones: dto.milestones || [],
       amount: dto.amount,
       deliveryDeadline: dto.deliveryDeadline,
@@ -89,5 +95,13 @@ export class EscrowController {
   @Post(':id/refund')
   async refund(@Param('id') id: string) {
     return this.escrowService.refund(id);
+  }
+
+  // Defense-in-depth: Lock escrow when dispute.opened event is received
+  // This ensures that if the transactional lock in dispute-service fails,
+  // the escrow is still locked via Kafka event
+  @EventPattern(KafkaEvents.DISPUTE_OPENED)
+  async handleDisputeOpened(@Payload() data: any) {
+    return this.escrowService.lockEscrowOnDisputeOpen(data.escrowId, data.disputeId, data.breachCategory);
   }
 }

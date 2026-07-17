@@ -30,18 +30,85 @@ model Otp {
 }
 
 model Dispute {
-  id           String        @id @default(uuid())
-  escrowId     String
-  raisedBy     String
-  reason       String
-  status       DisputeStatus @default(OPEN)
-  resolution   String?
-  resolvedBy   String?
-  resolvedAt   DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                String          @id @default(cuid())
+  relatedContractId String          // FK to Escrow.id — the escrow this dispute is against
+  relatedContract   Escrow          @relation(fields: [relatedContractId], references: [id])
+  openedById        String
+  breachCategory    BreachCategory
+  disputedAmount    Decimal         // record-keeping/bot context only
+  claimDescription  String
+  status            DisputeStatus   @default(OPEN)
+  resolution        String?
+  resolvedBy        ResolvedBy?
+  confidence        Float?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  @@index([escrowId])
+  evidence          Evidence[]      // all evidence, marked with proofOfBreach flag
+  events            DisputeEvent[]
+
+  @@index([relatedContractId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+}
+
+model Evidence {
+  id                String   @id @default(cuid())
+  disputeId         String
+  dispute           Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  url               String
+  mimeType          String   // e.g., "image/jpeg", "video/mp4"
+  fileName          String
+  fileHash          String   // sha256 hash for tampering detection
+  fileSize          Int?
+  uploadedById      String
+  proofOfBreach     Boolean  @default(false) // true if this is part of initial proof
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([disputeId])
+  @@index([fileHash])
+  @@index([createdAt(sort: Desc)])
+}
+
+model DisputeEvent {
+  id             String   @id @default(cuid())
+  disputeId      String
+  dispute        Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  eventType      DisputeEventType
+  payload        Json?    // event-specific data
+  triggeredBy    String
+  createdAt      DateTime @default(now())
+
+  @@index([disputeId])
+  @@index([createdAt(sort: Desc)])
+}
+
+enum BreachCategory {
+  QUALITY_ISSUES
+  DELAYED_DELIVERY
+  COMMUNICATION_CESSATION
+  OUT_OF_SCOPE_DEMANDS
+  OTHERS
+}
+
+enum DisputeEventType {
+  STATUS_CHANGE
+  EVIDENCE_ADDED
+  EVIDENCE_REMOVED
+  RESOLUTION_PROPOSED
+  RESOLUTION_ACCEPTED
+  REVIEW_REQUESTED
+  SETTLEMENT_PROPOSED
+  MESSAGE
+  BOT_ANALYSIS_RESULT
+}
+
+enum ResolvedBy {
+  ADMIN_DECISION
+  BOT_ADJUDICATION
+  MUTUAL_SETTLEMENT
+  SYSTEM_AUTO_RELEASE
 }
 
 enum DisputeStatus {
@@ -95,14 +162,20 @@ model Escrow {
   status                EscrowStatus @default(CREATED)
   proofUrl              String?
   deliveredAt           DateTime?
+  isLocked              Boolean   @default(false)
+  lockedReason          String?   // e.g. "DISPUTE_OPEN"
+  lockedAt              DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
+  disputes              Dispute[]
 
   @@index([buyerId])
   @@index([sellerId])
   @@index([status])
   @@index([buyerId, status])
   @@index([sellerId, status])
+  @@index([isLocked])
 }
 
 model Payment {

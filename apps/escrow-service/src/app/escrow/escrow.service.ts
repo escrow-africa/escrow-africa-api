@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Inject, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Inject, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientProxy } from '@nestjs/microservices';
 import axios from 'axios';
@@ -7,7 +7,7 @@ import { KafkaEvents } from '@org/kafka';
 import { CloudinaryService } from './cloudinary.service';
 
 @Injectable()
-export class EscrowService {
+export class EscrowService implements OnModuleDestroy {
 	constructor(
 		private readonly prisma: PrismaService,
 		@Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientProxy,
@@ -26,6 +26,7 @@ export class EscrowService {
 
 	// In-memory Monnify token cache — avoids a round-trip on every transfer
 	private monnifyTokenCache: { token: string; expiresAt: number } | null = null;
+	private inspectionIntervalHandle: NodeJS.Timeout | null = null;
 
 	private async getMonnifyAccessToken(): Promise<string> {
 		if (this.monnifyTokenCache && Date.now() < this.monnifyTokenCache.expiresAt) {
@@ -73,19 +74,52 @@ export class EscrowService {
 	}
 
 	async createEscrowDetailed(opts: {
-		buyerEmail: string;
-		sellerId: string;
+		creatorRole: 'BUYER' | 'SELLER';
+		authenticatedUserId: string;
+		authenticatedUserEmail?: string;
+		buyerEmail?: string;
+		sellerEmail?: string;
 		milestones: string[];
 		amount: number;
 		deliveryDeadline: string | Date;
 		inspectionPeriodDays: 1 | 3 | 5 | 7;
 		description?: string;
 	}) {
-		const { buyerEmail, sellerId, milestones, amount, deliveryDeadline, inspectionPeriodDays, description } = opts;
+		const {
+			creatorRole,
+			authenticatedUserId,
+			authenticatedUserEmail,
+			buyerEmail,
+			sellerEmail,
+			milestones,
+			amount,
+			deliveryDeadline,
+			inspectionPeriodDays,
+			description,
+		} = opts;
 		if (amount <= 0) throw new BadRequestException('Amount must be positive');
 
-		// resolve buyer id by email
-		const buyerId = await this.findUserIdByEmail(buyerEmail);
+		let buyerId: string;
+		let sellerId: string;
+		let buyerContactEmail: string | null = null;
+		let sellerContactEmail: string | null = null;
+
+		if (creatorRole === 'SELLER') {
+			if (!buyerEmail) throw new BadRequestException('Buyer email is required when creatorRole is SELLER');
+			buyerId = await this.findUserIdByEmail(buyerEmail);
+			sellerId = authenticatedUserId;
+			buyerContactEmail = buyerEmail;
+		} else {
+			if (!sellerEmail) throw new BadRequestException('Seller email is required when creatorRole is BUYER');
+			sellerId = await this.findUserIdByEmail(sellerEmail);
+			buyerId = authenticatedUserId;
+			buyerContactEmail = authenticatedUserEmail || null;
+			sellerContactEmail = sellerEmail;
+		}
+
+		if (buyerId === sellerId) {
+			throw new BadRequestException('Buyer and seller must be different users');
+		}
 
 		// generate escrow code and payment reference + link
 		const escrowCode = await this.generateEscrowCode();
@@ -125,8 +159,28 @@ export class EscrowService {
 			} as any,
 		});
 
-		this.kafkaClient.emit(KafkaEvents.ESCROW_CREATED, { escrowId: created.id, buyerId, sellerId, amount, buyerEmail });
-		this.kafkaClient.emit(KafkaEvents.ESCROW_PAYMENT_INITIATED, { escrowId: created.id, paymentReference, amount, fee, buyerEmail });
+		const eventPayload: any = {
+			escrowId: created.id,
+			buyerId,
+			sellerId,
+			amount,
+			creatorRole,
+		};
+
+		if (creatorRole === 'SELLER') {
+			eventPayload.buyerEmail = buyerContactEmail;
+		} else {
+			eventPayload.sellerEmail = sellerContactEmail;
+		}
+
+		this.kafkaClient.emit(KafkaEvents.ESCROW_CREATED, eventPayload);
+		this.kafkaClient.emit(KafkaEvents.ESCROW_PAYMENT_INITIATED, {
+			escrowId: created.id,
+			paymentReference,
+			amount,
+			fee,
+			buyerEmail: creatorRole === 'SELLER' ? buyerContactEmail : buyerContactEmail,
+		});
 
 		return { escrow: created, paymentReference };
 	}
@@ -255,6 +309,12 @@ export class EscrowService {
 		if (!escrow) {
 			throw new NotFoundException('Escrow not found');
 		}
+
+		// Enforce fund lock — if escrow is locked due to an open dispute, reject release
+		if (escrow.isLocked === true) {
+			throw new ConflictException(`Escrow is locked due to ${escrow.lockedReason || 'an open dispute'}. Funds cannot be released while locked.`);
+		}
+
 		const buyerUser = await this.prisma.user.findUnique({ where: { id: escrow.buyerId }, select: { email: true } });
 		const buyerEmail = buyerUser?.email || null;
 		if (escrow.status !== 'UNDER_REVIEW') {
@@ -491,6 +551,8 @@ export class EscrowService {
 					return { ...escrow, user: seller };
 				}
 			}
+
+			return { ...escrow, buyer, seller };
 		});
 	}
 
@@ -522,12 +584,12 @@ export class EscrowService {
 			'IN_PROGRESS',
 			'DELIVERED',
 			'UNDER_REVIEW',
-		];
+		] as const;
 
 		const activeEscrows = await this.prisma.escrow.findMany({
 			where: {
 				status: {
-					in: activeStatuses,
+					in: activeStatuses as any,
 				},
 				OR: [{ buyerId: userId }, { sellerId: userId }],
 			},
@@ -556,6 +618,42 @@ export class EscrowService {
 		};
 	}
 
+	async lockEscrowOnDisputeOpen(escrowId: string, disputeId: string, breachCategory: string) {
+		try {
+			const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+			if (!escrow) {
+				this.logger.warn(`Escrow ${escrowId} not found when locking on dispute open (dispute: ${disputeId})`);
+				return;
+			}
+
+			// If already locked, just log and return (idempotent)
+			if (escrow.isLocked === true) {
+				this.logger.debug(`Escrow ${escrowId} already locked (dispute: ${disputeId})`);
+				return;
+			}
+
+			// Lock the escrow
+			const locked = await this.prisma.escrow.update({
+				where: { id: escrowId },
+				data: {
+					isLocked: true,
+					lockedReason: 'DISPUTE_OPEN',
+					lockedAt: new Date(),
+				},
+			});
+
+			this.logger.log(`Escrow ${escrowId} locked via Kafka dispute.opened event (dispute: ${disputeId})`);
+			this.kafkaClient.emit(KafkaEvents.ESCROW_LOCKED, {
+				escrowId: locked.id,
+				disputeId,
+				breachCategory,
+				lockedAt: locked.lockedAt,
+			});
+		} catch (err: any) {
+			this.logger.error(`Failed to lock escrow ${escrowId} on dispute open event`, err?.message || err);
+		}
+	}
+
 	// Start periodic inspection expiry checks
 	private startInspectionExpiryChecks() {
 		const intervalMinutes = Number(process.env.INSPECTION_CHECK_INTERVAL_MINUTES) || 10;
@@ -563,6 +661,13 @@ export class EscrowService {
 			this.processExpiredInspections().catch((e) => this.logger.error('Inspection expiry check failed', e?.message || e));
 		}, intervalMinutes * 60 * 1000);
 		this.logger.log(`Inspection expiry checks scheduled every ${intervalMinutes} minutes`);
+	}
+
+	async onModuleDestroy() {
+		if (this.inspectionIntervalHandle) {
+			clearInterval(this.inspectionIntervalHandle);
+			this.inspectionIntervalHandle = null;
+		}
 	}
 
 	private async processExpiredInspections() {
