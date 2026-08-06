@@ -31,9 +31,9 @@ export class WalletController {
   }
 
   @Get('details')
-  async details(@Req() req: Request) {
+  async details(@Req() req: Request, @Query('page') page = '1', @Query('limit') limit = '20') {
     const userId = (req as any).user?.sub;
-    return this.walletService.getWalletDetails(userId);
+    return this.walletService.getWalletDetails(userId, Number(page) || 1, Number(limit) || 20);
   }
 
   @Post('deposit')

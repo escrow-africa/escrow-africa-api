@@ -13,8 +13,8 @@ import { AdminModule } from '../admin/admin.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: configService.get<string>('JWT_EXPIRE') },
+        secret: configService.get<string>('JWT_SECRET') ?? 'fallback-secret',
+        signOptions: { expiresIn: '1d' },
       }),
     }),
   ],

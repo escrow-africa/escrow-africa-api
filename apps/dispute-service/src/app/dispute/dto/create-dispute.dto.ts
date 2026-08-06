@@ -1,43 +1,38 @@
-import { IsNotEmpty, IsString, IsUUID, IsNumber, IsArray, ValidateNested, IsEnum, IsPositive, Min, IsOptional } from 'class-validator';
+import { IsString, IsUUID, IsNumber, IsPositive, IsOptional, IsNotEmpty } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export class ProofOfBreachFileDto {
-  @IsString()
-  @IsNotEmpty()
-  url!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  mimeType!: string; // must be image/* or video/*
-
-  @IsString()
-  @IsNotEmpty()
-  fileName!: string;
-}
-
 export class CreateDisputeDto {
+  @IsOptional()
   @IsUUID()
-  @IsNotEmpty()
-  relatedContractId!: string; // escrow ID
+  relatedContractId?: string; // escrow ID
 
-  @IsEnum(['QUALITY_ISSUES', 'DELAYED_DELIVERY', 'COMMUNICATION_CESSATION', 'OUT_OF_SCOPE_DEMANDS', 'OTHERS'])
-  @IsNotEmpty()
-  breachCategory!: string;
+  @IsOptional()
+  @IsString()
+  contract?: string; // frontend-friendly reference such as BUY-801
 
+  @IsOptional()
+  @IsString()
+  breachCategory?: string;
+
+  @Type(() => Number)
+  @IsOptional()
   @IsNumber()
   @IsPositive()
-  @IsNotEmpty()
-  disputedAmount!: number; // must be > 0
+  disputedAmount?: number; // must be > 0
 
+  @Type(() => Number)
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  amount?: number;
+
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  claimDescription!: string;
+  claimDescription?: string;
 
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => ProofOfBreachFileDto)
-  @IsNotEmpty()
-  proofOfBreach!: ProofOfBreachFileDto[]; // min 1 file, enforced in service
+  @IsOptional()
+  @IsString()
+  description?: string;
 }
 
 export class CreateDisputeMessageDto {
@@ -52,14 +47,12 @@ export class RequestReviewDto {
   reason?: string;
 }
 
-export class ProposeSettlementDto {
+export class RequestManualDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  proposedResolution!: string;
+  requesterId?: string; // used when caller is a bot or external integration
 
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @IsPositive()
-  offerAmount?: number;
+  @IsString()
+  reason?: string;
 }

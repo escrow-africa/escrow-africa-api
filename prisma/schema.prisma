@@ -13,8 +13,24 @@ model User {
   phone          String
   isEmailVerified Boolean  @default(false)
   password       String
+  referrerId     String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  referrer       Agent?   @relation("UserReferrer", fields: [referrerId], references: [id])
+}
+
+model Agent {
+  id            String   @id @default(uuid())
+  fullName      String
+  email         String   @unique
+  phone         String
+  password      String
+  referralCode  String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  referredUsers User[]   @relation("UserReferrer")
 }
 
 model Otp {
@@ -57,6 +73,7 @@ model Evidence {
   disputeId         String
   dispute           Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
   url               String
+  proofUrl          String?
   mimeType          String   // e.g., "image/jpeg", "video/mp4"
   fileName          String
   fileHash          String   // sha256 hash for tampering detection
@@ -100,8 +117,11 @@ enum DisputeEventType {
   RESOLUTION_ACCEPTED
   REVIEW_REQUESTED
   SETTLEMENT_PROPOSED
+  SETTLEMENT_ACCEPTED
+  SETTLEMENT_DECLINED
   MESSAGE
   BOT_ANALYSIS_RESULT
+  BOT_MESSAGE
 }
 
 enum ResolvedBy {
@@ -165,6 +185,8 @@ model Escrow {
   isLocked              Boolean   @default(false)
   lockedReason          String?   // e.g. "DISPUTE_OPEN"
   lockedAt              DateTime?
+  approvalToken         String?   @unique // single-use token for the buyer's email approval link; cleared once used
+  approvedAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -204,6 +226,7 @@ enum PaymentStatus {
 
 enum EscrowStatus {
   CREATED
+  PENDING_APPROVAL
   PENDING_PAYMENT
   FUNDED
   IN_PROGRESS

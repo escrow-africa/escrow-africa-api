@@ -284,10 +284,14 @@ export class MonnifyService {
   }
 
   async parseWebhook(payload: any) {
+    // Monnify wraps the actual notification fields inside `eventData` for real transaction/
+    // reserved-account webhooks (top-level payload only carries `eventType`). Unwrap it if present
+    // so the field lookups below actually find anything.
+    const data = payload?.eventData || payload;
     // Monnify structures vary; common fields: paymentReference, transactionReference, amountPaid, paymentStatus
-    const providerReference = payload?.paymentReference || payload?.transactionReference || payload?.reference;
-    const amount = payload?.amountPaid || payload?.amount || payload?.transactionAmount;
-    const status = (payload?.paymentStatus || payload?.status || payload?.payment_status || '').toUpperCase();
+    const providerReference = data?.paymentReference || data?.transactionReference || data?.reference;
+    const amount = data?.amountPaid || data?.amount || data?.transactionAmount;
+    const status = (data?.paymentStatus || data?.status || data?.payment_status || '').toUpperCase();
     return { providerReference, amount, status, raw: payload };
   }
 }
