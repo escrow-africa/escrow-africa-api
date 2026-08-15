@@ -1,13 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, Inject, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Inject, Logger, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClientProxy } from '@nestjs/microservices';
 import axios from 'axios';
+import * as crypto from 'crypto';
 
 import { KafkaEvents } from '@org/kafka';
 import { CloudinaryService } from './cloudinary.service';
 
 @Injectable()
-export class EscrowService {
+export class EscrowService implements OnModuleDestroy {
 	constructor(
 		private readonly prisma: PrismaService,
 		@Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientProxy,
@@ -26,6 +27,7 @@ export class EscrowService {
 
 	// In-memory Monnify token cache — avoids a round-trip on every transfer
 	private monnifyTokenCache: { token: string; expiresAt: number } | null = null;
+	private inspectionIntervalHandle: NodeJS.Timeout | null = null;
 
 	private async getMonnifyAccessToken(): Promise<string> {
 		if (this.monnifyTokenCache && Date.now() < this.monnifyTokenCache.expiresAt) {
@@ -73,25 +75,61 @@ export class EscrowService {
 	}
 
 	async createEscrowDetailed(opts: {
-		buyerEmail: string;
-		sellerId: string;
+		creatorRole: 'BUYER' | 'SELLER';
+		authenticatedUserId: string;
+		authenticatedUserEmail?: string;
+		buyerEmail?: string;
+		sellerEmail?: string;
 		milestones: string[];
 		amount: number;
 		deliveryDeadline: string | Date;
 		inspectionPeriodDays: 1 | 3 | 5 | 7;
 		description?: string;
 	}) {
-		const { buyerEmail, sellerId, milestones, amount, deliveryDeadline, inspectionPeriodDays, description } = opts;
+		const {
+			creatorRole,
+			authenticatedUserId,
+			authenticatedUserEmail,
+			buyerEmail,
+			sellerEmail,
+			milestones,
+			amount,
+			deliveryDeadline,
+			inspectionPeriodDays,
+			description,
+		} = opts;
 		if (amount <= 0) throw new BadRequestException('Amount must be positive');
 
-		// resolve buyer id by email
-		const buyerId = await this.findUserIdByEmail(buyerEmail);
+		let buyerId: string;
+		let sellerId: string;
+		let buyerContactEmail: string | null = null;
+		let sellerContactEmail: string | null = null;
+
+		if (creatorRole === 'SELLER') {
+			if (!buyerEmail) throw new BadRequestException('Buyer email is required when creatorRole is SELLER');
+			buyerId = await this.findUserIdByEmail(buyerEmail);
+			sellerId = authenticatedUserId;
+			buyerContactEmail = buyerEmail;
+			sellerContactEmail = authenticatedUserEmail || null;
+		} else {
+			if (!sellerEmail) throw new BadRequestException('Seller email is required when creatorRole is BUYER');
+			sellerId = await this.findUserIdByEmail(sellerEmail);
+			buyerId = authenticatedUserId;
+			buyerContactEmail = authenticatedUserEmail || null;
+			sellerContactEmail = sellerEmail;
+		}
+
+		if (buyerId === sellerId) {
+			throw new BadRequestException('Buyer and seller must be different users');
+		}
 
 		// generate escrow code and payment reference + link
 		const escrowCode = await this.generateEscrowCode();
 		const paymentReference = this.generatePaymentReference();
+		// Single-use token for the buyer's email approval link - the escrow stays gated in
+		// PENDING_APPROVAL (no delivery, no funding) until this is consumed via approveByBuyer().
+		const approvalToken = crypto.randomBytes(32).toString('hex');
 
-		// create escrow in PENDING_PAYMENT state
 		const created = await this.prisma.escrow.create({
 			data: {
 				escrowCode,
@@ -103,7 +141,8 @@ export class EscrowService {
 				inspectionPeriodDays,
 				description: description || null,
 				paymentReference,
-				status: 'IN_PROGRESS',
+				status: 'PENDING_APPROVAL',
+				approvalToken,
 			} as any,
 		});
 
@@ -125,10 +164,57 @@ export class EscrowService {
 			} as any,
 		});
 
-		this.kafkaClient.emit(KafkaEvents.ESCROW_CREATED, { escrowId: created.id, buyerId, sellerId, amount, buyerEmail });
-		this.kafkaClient.emit(KafkaEvents.ESCROW_PAYMENT_INITIATED, { escrowId: created.id, paymentReference, amount, fee, buyerEmail });
+		const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000/api';
+		const approvalLink = `${apiBaseUrl}/escrow/${created.id}/approve?token=${approvalToken}`;
+
+		this.kafkaClient.emit(KafkaEvents.ESCROW_CREATED, {
+			escrowId: created.id,
+			buyerId,
+			sellerId,
+			amount,
+			creatorRole,
+			buyerEmail: buyerContactEmail,
+			sellerEmail: sellerContactEmail,
+			approvalLink,
+		});
+		this.kafkaClient.emit(KafkaEvents.ESCROW_PAYMENT_INITIATED, {
+			escrowId: created.id,
+			paymentReference,
+			amount,
+			fee,
+			buyerEmail: buyerContactEmail,
+		});
 
 		return { escrow: created, paymentReference };
+	}
+
+	// Consumes the single-use token from the buyer's approval email link. Moves the escrow out
+	// of PENDING_APPROVAL (where delivery/funding are blocked) into IN_PROGRESS.
+	async approveByBuyer(escrowId: string, token: string) {
+		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+		if (!escrow) throw new NotFoundException('Escrow not found');
+
+		if (escrow.status !== 'PENDING_APPROVAL') {
+			throw new BadRequestException(escrow.approvedAt ? 'This escrow has already been approved' : 'This escrow is not awaiting approval');
+		}
+		if (!token || !escrow.approvalToken || escrow.approvalToken !== token) {
+			throw new BadRequestException('Invalid or expired approval link');
+		}
+
+		const updated = await this.prisma.escrow.update({
+			where: { id: escrowId },
+			data: { status: 'IN_PROGRESS', approvedAt: new Date(), approvalToken: null } as any,
+		});
+
+		const sellerUser = await this.prisma.user.findUnique({ where: { id: updated.sellerId }, select: { email: true } });
+		this.kafkaClient.emit(KafkaEvents.ESCROW_APPROVED, {
+			escrowId: updated.id,
+			buyerId: updated.buyerId,
+			sellerId: updated.sellerId,
+			sellerEmail: sellerUser?.email || null,
+		});
+
+		return updated;
 	}
 
 	private generatePaymentReference() {
@@ -250,15 +336,26 @@ export class EscrowService {
 		return funded;
 	}
 
-	async release(escrowId: string) {
+	async release(escrowId: string, opts: { viaDisputeResolution?: boolean } = {}) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) {
 			throw new NotFoundException('Escrow not found');
 		}
+
+		// Enforce fund lock — if escrow is locked due to an open dispute, reject release.
+		// A dispute resolution verdict is the one legitimate way to release a locked escrow;
+		// it unlocks as part of settling, rather than requiring the normal unlocked precondition.
+		if (escrow.isLocked === true && !opts.viaDisputeResolution) {
+			throw new ConflictException(`Escrow is locked due to ${escrow.lockedReason || 'an open dispute'}. Funds cannot be released while locked.`);
+		}
+
 		const buyerUser = await this.prisma.user.findUnique({ where: { id: escrow.buyerId }, select: { email: true } });
 		const buyerEmail = buyerUser?.email || null;
-		if (escrow.status !== 'UNDER_REVIEW') {
-			throw new BadRequestException('Escrow must be UNDER_REVIEW to release');
+		const releasableStatuses = opts.viaDisputeResolution
+			? ['UNDER_REVIEW', 'IN_PROGRESS', 'DELIVERED', 'FUNDED', 'DISPUTED']
+			: ['UNDER_REVIEW'];
+		if (!releasableStatuses.includes(escrow.status)) {
+			throw new BadRequestException(`Escrow must be UNDER_REVIEW to release`);
 		}
 
 		// compute fee and seller payout
@@ -424,17 +521,28 @@ export class EscrowService {
 			this.logger.warn('Failed to update escrow payment record or create seller payout record', e?.message || e);
 		}
 
-		const released = await this.prisma.escrow.update({ where: { id: escrowId }, data: { status: 'RELEASED' } as any });
+		const released = await this.prisma.escrow.update({
+			where: { id: escrowId },
+			data: opts.viaDisputeResolution
+				? { status: 'RELEASED', isLocked: false, lockedReason: null }
+				: { status: 'RELEASED' },
+		} as any);
 		this.kafkaClient.emit(KafkaEvents.ESCROW_RELEASED, { escrowId: released.id, buyerId: released.buyerId, sellerId: released.sellerId, amount: released.amount, fee, buyerEmail });
 		return released;
     }
 
-	async refund(escrowId: string) {
+	async refund(escrowId: string, opts: { viaDisputeResolution?: boolean } = {}) {
 		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
 		if (!escrow) {
 			throw new NotFoundException('Escrow not found');
 		}
-		if (escrow.status !== 'FUNDED') {
+		if (escrow.isLocked === true && !opts.viaDisputeResolution) {
+			throw new ConflictException(`Escrow is locked due to ${escrow.lockedReason || 'an open dispute'}. Funds cannot be refunded while locked.`);
+		}
+		const refundableStatuses = opts.viaDisputeResolution
+			? ['FUNDED', 'IN_PROGRESS', 'DELIVERED', 'UNDER_REVIEW', 'DISPUTED']
+			: ['FUNDED'];
+		if (!refundableStatuses.includes(escrow.status)) {
 			throw new BadRequestException('Escrow not funded');
 		}
 
@@ -447,14 +555,62 @@ export class EscrowService {
 			await this.prisma.wallet.update({ where: { id: buyerWallet.id }, data: { balance: { increment: Number(escrow.amount) } as any } });
 		}
 
-		const refunded = await this.prisma.escrow.update({ where: { id: escrowId }, data: { status: 'REFUNDED' } as any });
+		const refunded = await this.prisma.escrow.update({
+			where: { id: escrowId },
+			data: opts.viaDisputeResolution
+				? { status: 'REFUNDED', isLocked: false, lockedReason: null }
+				: { status: 'REFUNDED' },
+		} as any);
 		this.kafkaClient.emit(KafkaEvents.ESCROW_REFUNDED, { escrowId: refunded.id, buyerId: refunded.buyerId, sellerId: refunded.sellerId, amount: refunded.amount });
 		return refunded;
 	}
 
-	async getEscrows(userId: string, preset: 'active' | 'completed' | 'disputed' | 'all' = 'active') {
+	async cancel(escrowId: string, requesterId: string, reason?: string) {
+		const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+		if (!escrow) {
+			throw new NotFoundException('Escrow not found');
+		}
+		if (requesterId !== escrow.buyerId && requesterId !== escrow.sellerId) {
+			throw new BadRequestException('Only the buyer or seller on this escrow can cancel it');
+		}
+
+		const cancellableStatuses = ['CREATED', 'PENDING_APPROVAL', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS'];
+		if (!cancellableStatuses.includes(escrow.status)) {
+			throw new BadRequestException(`Cannot cancel an escrow with status ${escrow.status}`);
+		}
+
+		const wasFunded = escrow.status === 'FUNDED' || escrow.status === 'IN_PROGRESS';
+
+		if (wasFunded) {
+			// refund the locked funds back to the buyer, same as refund()
+			const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
+			if (!buyerWallet) {
+				await this.prisma.wallet.create({ data: { userId: escrow.buyerId, balance: escrow.amount } as any });
+			} else {
+				await this.prisma.wallet.update({ where: { id: buyerWallet.id }, data: { balance: { increment: Number(escrow.amount) } as any } });
+			}
+		}
+
+		const cancelled = await this.prisma.escrow.update({
+			where: { id: escrowId },
+			data: { status: 'CANCELLED', lockedReason: reason || null } as any,
+		});
+
+		this.kafkaClient.emit(KafkaEvents.ESCROW_CANCELLED, {
+			escrowId: cancelled.id,
+			buyerId: cancelled.buyerId,
+			sellerId: cancelled.sellerId,
+			amount: cancelled.amount,
+			wasFunded,
+			reason,
+		});
+
+		return cancelled;
+	}
+
+	async getEscrows(userId: string, preset: 'active' | 'completed' | 'disputed' | 'all' = 'active', page = 1, limit = 20) {
 		const presets: Record<string, string[]> = {
-			active: ['CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED', 'UNDER_REVIEW'],
+			active: ['PENDING_APPROVAL', 'CREATED', 'PENDING_PAYMENT', 'FUNDED', 'IN_PROGRESS', 'DELIVERED', 'UNDER_REVIEW'],
 			completed: ['COMPLETED', 'RELEASED'],
 			disputed: ['DISPUTED'],
 		};
@@ -464,7 +620,13 @@ export class EscrowService {
 		}
 		if (userId) where.OR = [{ buyerId: userId }, { sellerId: userId }];
 
-		const escrows = await this.prisma.escrow.findMany({ where });
+		const take = Math.min(limit, 100);
+		const skip = Math.max(0, (page - 1) * take);
+
+		const [escrows, total] = await Promise.all([
+			this.prisma.escrow.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),
+			this.prisma.escrow.count({ where }),
+		]);
 
 		// collect unique user ids
 		const userIds = new Set<string>();
@@ -479,7 +641,7 @@ export class EscrowService {
 		});
 		const userMap = new Map(users.map((u) => [u.id, u]));
 
-		return escrows.map((escrow) => {
+		const data = escrows.map((escrow) => {
 			const buyer = userMap.get(escrow.buyerId) ? { id: escrow.buyerId, name: userMap.get(escrow.buyerId)!.fullName, email: userMap.get(escrow.buyerId)!.email } : null;
 			const seller = userMap.get(escrow.sellerId) ? { id: escrow.sellerId, name: userMap.get(escrow.sellerId)!.fullName, email: userMap.get(escrow.sellerId)!.email } : null;
 
@@ -491,7 +653,11 @@ export class EscrowService {
 					return { ...escrow, user: seller };
 				}
 			}
+
+			return { ...escrow, buyer, seller };
 		});
+
+		return { data, page, limit: take, total };
 	}
 
 	async getEscrowById(escrowId: string, currentUserId?: string) {
@@ -516,18 +682,19 @@ export class EscrowService {
 
 	async getEscrowStats(userId: string) {
 		const activeStatuses = [
+			'PENDING_APPROVAL',
 			'CREATED',
 			'PENDING_PAYMENT',
 			'FUNDED',
 			'IN_PROGRESS',
 			'DELIVERED',
 			'UNDER_REVIEW',
-		];
+		] as const;
 
 		const activeEscrows = await this.prisma.escrow.findMany({
 			where: {
 				status: {
-					in: activeStatuses,
+					in: activeStatuses as any,
 				},
 				OR: [{ buyerId: userId }, { sellerId: userId }],
 			},
@@ -556,6 +723,88 @@ export class EscrowService {
 		};
 	}
 
+	async lockEscrowOnDisputeOpen(escrowId: string, disputeId: string, breachCategory: string) {
+		try {
+			const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+			if (!escrow) {
+				this.logger.warn(`Escrow ${escrowId} not found when locking on dispute open (dispute: ${disputeId})`);
+				return;
+			}
+
+			// If already locked, just log and return (idempotent)
+			if (escrow.isLocked === true) {
+				this.logger.debug(`Escrow ${escrowId} already locked (dispute: ${disputeId})`);
+				return;
+			}
+
+			// Lock the escrow
+			const locked = await this.prisma.escrow.update({
+				where: { id: escrowId },
+				data: {
+					isLocked: true,
+					lockedReason: 'DISPUTE_OPEN',
+					lockedAt: new Date(),
+				},
+			});
+
+			this.logger.log(`Escrow ${escrowId} locked via Kafka dispute.opened event (dispute: ${disputeId})`);
+			this.kafkaClient.emit(KafkaEvents.ESCROW_LOCKED, {
+				escrowId: locked.id,
+				disputeId,
+				breachCategory,
+				lockedAt: locked.lockedAt,
+			});
+		} catch (err: any) {
+			this.logger.error(`Failed to lock escrow ${escrowId} on dispute open event`, err?.message || err);
+		}
+	}
+
+	// Entry point for every DISPUTE_RESOLVED event, whether or not it carries a fund-moving
+	// verdict. Only the bot's AI adjudication (and, in future, a structured admin decision)
+	// currently sets `verdict` - admin free-text resolutions and mutual settlements do not, since
+	// neither captures which party should receive the funds. Those still close out the dispute,
+	// though, so the lock DISPUTE_OPENED put in place must be released either way; otherwise the
+	// escrow is stuck locked forever with no verdict ever arriving to unlock it.
+	async handleDisputeResolved(escrowId: string, disputeId: string, verdict?: 'RELEASE_TO_SELLER' | 'REFUND_BUYER') {
+		if (verdict === 'RELEASE_TO_SELLER' || verdict === 'REFUND_BUYER') {
+			return this.applyDisputeVerdict(escrowId, verdict, disputeId);
+		}
+
+		try {
+			const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+			if (!escrow || !escrow.isLocked) return;
+			await this.prisma.escrow.update({ where: { id: escrowId }, data: { isLocked: false, lockedReason: null, lockedAt: null } });
+			this.logger.log(`Escrow ${escrowId} unlocked after dispute ${disputeId} resolved without a fund-moving verdict`);
+		} catch (err: any) {
+			this.logger.error(`Failed to unlock escrow ${escrowId} after dispute ${disputeId} resolved`, err?.message || err);
+		}
+	}
+
+	// Triggered when dispute-service resolves a dispute with a fund-moving verdict (bot
+	// adjudication or an admin decision that specifies one). Idempotent against repeat delivery.
+	async applyDisputeVerdict(escrowId: string, verdict: 'RELEASE_TO_SELLER' | 'REFUND_BUYER', disputeId: string) {
+		try {
+			const escrow = await this.prisma.escrow.findUnique({ where: { id: escrowId } });
+			if (!escrow) {
+				this.logger.warn(`Escrow ${escrowId} not found when applying dispute verdict (dispute: ${disputeId})`);
+				return;
+			}
+			if (['RELEASED', 'REFUNDED', 'COMPLETED', 'CANCELLED'].includes(escrow.status)) {
+				this.logger.debug(`Escrow ${escrowId} already settled (status ${escrow.status}); ignoring dispute verdict`);
+				return;
+			}
+
+			if (verdict === 'RELEASE_TO_SELLER') {
+				await this.release(escrowId, { viaDisputeResolution: true });
+			} else if (verdict === 'REFUND_BUYER') {
+				await this.refund(escrowId, { viaDisputeResolution: true });
+			}
+			this.logger.log(`Applied dispute verdict ${verdict} to escrow ${escrowId} (dispute: ${disputeId})`);
+		} catch (err: any) {
+			this.logger.error(`Failed to apply dispute verdict to escrow ${escrowId} (dispute: ${disputeId})`, err?.message || err);
+		}
+	}
+
 	// Start periodic inspection expiry checks
 	private startInspectionExpiryChecks() {
 		const intervalMinutes = Number(process.env.INSPECTION_CHECK_INTERVAL_MINUTES) || 10;
@@ -563,6 +812,13 @@ export class EscrowService {
 			this.processExpiredInspections().catch((e) => this.logger.error('Inspection expiry check failed', e?.message || e));
 		}, intervalMinutes * 60 * 1000);
 		this.logger.log(`Inspection expiry checks scheduled every ${intervalMinutes} minutes`);
+	}
+
+	async onModuleDestroy() {
+		if (this.inspectionIntervalHandle) {
+			clearInterval(this.inspectionIntervalHandle);
+			this.inspectionIntervalHandle = null;
+		}
 	}
 
 	private async processExpiredInspections() {

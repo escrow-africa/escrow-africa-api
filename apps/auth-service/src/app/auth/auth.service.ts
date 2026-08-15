@@ -54,7 +54,7 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
-    const { fullName, email, phone, password } = registerDto;
+    const { fullName, email, phone, password, referralCode } = registerDto;
 
     const isExisting = await this.userService.findOne(email);
 
@@ -62,11 +62,27 @@ export class AuthService {
       throw new ConflictException('A user with this email already exists');
     }
 
+    let referrerId: string | undefined;
+
+    if (referralCode) {
+      const agent = await this.prisma.agent.findUnique({
+        where: { referralCode },
+        select: { id: true },
+      });
+
+      if (!agent) {
+        throw new BadRequestException('Invalid referral code');
+      }
+
+      referrerId = agent.id;
+    }
+
     const user = await this.userService.create({
       fullName,
       email,
       phone,
       password,
+      referrerId,
     });
 
     // create and store OTP for email verification

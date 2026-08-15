@@ -1,73 +1,92 @@
-# Escrow Africa — Backend (Nx Monorepo)
+# Escrow Africa — Backend
 
-This repository contains the backend services for the Escrow Africa platform implemented as a set of NestJS microservices in an Nx monorepo.
+This repository contains the backend services for Escrow Africa, implemented as a NestJS-based Nx monorepo. It powers the auth, wallet, escrow, dispute, notification, and gateway layers that support the platform.
 
-Key artifacts
-- **Workspace config:** [nx.json](nx.json)
-- **Root scripts & dependencies:** [package.json](package.json)
-- **Database schema:** [prisma/schema.prisma](prisma/schema.prisma)
+## Architecture Overview
 
-Overview
-This workspace uses Nx to organize multiple NestJS services and shared libraries. Services are located under `apps/` and reusable packages under `libs/`. The project uses TypeScript, Prisma for Postgres, and additional integrations (Kafka, Redis, Mongo where applicable).
+The backend is organized as a set of apps and shared libraries:
 
-Architecture & Services
-- **API gateway**: `apps/api-gateway` — Express-based NestJS app that reverse-proxies service routes to downstream services using environment-configured service URLs. Default port: 3000. See [apps/api-gateway/src/main.ts](apps/api-gateway/src/main.ts).
-- **Auth service**: `apps/auth-service` — authentication, user management, OTP; default port: 3001. See [apps/auth-service/src/main.ts](apps/auth-service/src/main.ts).
-- **Dispute service**: `apps/dispute-service` — dispute lifecycle management; default port: 3002.
-- **Escrow service**: `apps/escrow-service` — core escrow flows and payments; default port: 3003. See [apps/escrow-service/src/main.ts](apps/escrow-service/src/main.ts).
-- **Notification service**: `apps/notification-service` — emails, transactional notifications; default port: 3004.
-- **Wallet service**: `apps/wallet-service` — user wallets and balances; default port: 3005.
+- [apps/api-gateway](apps/api-gateway) — central gateway that exposes the public API and proxies requests to downstream services
+- [apps/auth-service](apps/auth-service) — authentication, user registration, OTP verification, and account-related flows
+- [apps/dispute-service](apps/dispute-service) — dispute creation and lifecycle management
+- [apps/escrow-service](apps/escrow-service) — escrow transaction creation and settlement logic
+- [apps/notification-service](apps/notification-service) — email and notification delivery
+- [apps/wallet-service](apps/wallet-service) — wallet balance and transaction operations
+- [apps/agent-service](apps/agent-service) — additional service support for agent-oriented workflows
 
-Shared Libraries
-- `libs/common` — minimal shared utilities and re-exports. See [libs/common/src/index.ts](libs/common/src/index.ts).
-- `libs/kafka`, `libs/postgres`, `libs/mongodb`, `libs/redis` — scaffolds for infra integrations. Check each package for exports and usage.
+Shared infrastructure is grouped under [libs](libs), including reusable abstractions for Kafka, PostgreSQL, MongoDB, and Redis integrations.
 
-Data Model (Prisma)
-- The canonical Postgres data model lives in [prisma/schema.prisma](prisma/schema.prisma). Models include `User`, `Otp`, `Escrow`, `Payment`, `Transaction`, `Dispute`, `Wallet`. Enums cover statuses and types used across services.
+## Key Technologies
 
-Integrations & Dependencies
-- **Databases:** Postgres (Prisma) is primary. `mongoose` is also present; verify which services use Mongo.
-- **Messaging:** `kafkajs` is included; `libs/kafka` contains a packaged scaffold.
-- **Cache / fast storage:** Redis library scaffold present under `libs/redis`.
-- **Auth & security:** `passport`, `passport-jwt`, `passport-local`, `@nestjs/jwt`, and `bcryptjs`.
-- **File uploads & storage:** `multer` and `cloudinary`.
-- **Email:** `nodemailer`.
+- NestJS + TypeScript
+- Nx monorepo tooling
+- Prisma with PostgreSQL
+- Kafka messaging support
+- Passport/JWT-based authentication
+- Cloudinary, multer, and nodemailer for media and notification support
 
-Build & Run (local)
-The workspace is Nx-based. Common workflows:
+## Database
 
-Install dependencies (root):
+The Prisma schema lives in [prisma/schema.prisma](prisma/schema.prisma), and migrations are stored in [prisma/migrations](prisma/migrations).
+
+Common Prisma commands:
+
 ```bash
-npm install
-```
-
-Run a single service in development (example: auth):
-```bash
-npm run serve:auth
-```
-
-Run all services locally (concurrently):
-```bash
-npm run serve:all
-```
-
-Serve builds (run distributed/production-like): first build, then start specific service:
-```bash
-npx nx build api-gateway
-npm run start:gateway
-```
-
-Notes on environment variables
-- The API gateway expects service base URLs via environment variables: `AUTH_API_URL`, `DISPUTE_API_URL`, `ESCROW_API_URL`, `NOTIFICATION_API_URL`, `WALLET_API_URL` (these are attached to Express locals at runtime).
-- Individual services read `PORT` and other service-specific config using `@nestjs/config`.
-
-Database migrations
-- Migrations are tracked under `prisma/migrations` — use Prisma CLI for status and applying migrations:
-```bash
+npx prisma generate
 npx prisma migrate status --schema=prisma/schema.prisma
 npx prisma migrate deploy --schema=prisma/schema.prisma
 ```
 
-Testing & Linting
-- Tests use NestJS testing utilities where present. Run Nx targets or `npx nx test <project>` when tests are defined.
-- Linting and formatting via ESLint and Prettier (configs in workspace root). Use `npx nx lint <project>`.
+## Environment Variables
+
+The gateway and services rely on environment configuration for ports and downstream service URLs. Typical values include:
+
+```bash
+PORT=3000
+AUTH_API_URL=http://localhost:3001
+DISPUTE_API_URL=http://localhost:3002
+ESCROW_API_URL=http://localhost:3003
+NOTIFICATION_API_URL=http://localhost:3004
+WALLET_API_URL=http://localhost:3005
+AGENT_API_URL=http://localhost:3006
+```
+
+## Getting Started
+
+Install dependencies from the repo root:
+
+```bash
+npm install
+```
+
+Run a single service in development:
+
+```bash
+npm run serve:auth
+```
+
+Run all backend services together:
+
+```bash
+npm run serve:all
+```
+
+## Available Scripts
+
+```bash
+npm run serve:auth
+npm run serve:dispute
+npm run serve:escrow
+npm run serve:notification
+npm run serve:wallet
+npm run serve:agent
+npm run serve:all
+npm run start:gateway
+npm run start:all
+```
+
+## Notes
+
+- The API gateway runs on port 3000 by default and proxies traffic to the microservices.
+- Nx is used to manage project targets and service execution.
+- Linting and testing can be run per project with Nx commands such as `npx nx lint <project>` and `npx nx test <project>`.

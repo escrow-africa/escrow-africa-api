@@ -1,46 +1,91 @@
-import { Controller, Post, Body, Inject, Logger } from '@nestjs/common';
-import { EventPattern, Payload, ClientKafka } from '@nestjs/microservices';
+import { Controller, Logger } from '@nestjs/common';
+import { EventPattern, Payload } from '@nestjs/microservices';
 import { KafkaEvents } from '@org/kafka';
 import { WhatsappService } from './whatsapp.service';
 import { MailerService } from './mailer.service';
 
-@Controller('webhook/whatsapp')
+// Pure notification-sending service: reacts to lifecycle events and performs the actual
+// outbound delivery (email, WhatsApp). It does not own any dispute/escrow domain logic or
+// inbound WhatsApp webhook handling - that lives in dispute-service, which has direct access
+// to the data needed to resolve a phone number to a user and dispute, and to enforce that
+// buyer and seller are only ever messaged separately. See WHATSAPP_SEND below.
+@Controller('notifications')
 export class NotificationController {
   private readonly logger = new Logger(NotificationController.name);
 
   constructor(
     private readonly whatsappService: WhatsappService,
-    @Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientKafka,
     private readonly mailerService: MailerService,
   ) {}
 
-  @EventPattern(KafkaEvents.DISPUTE_CREATED)
-  async handleDisputeCreated(@Payload() data: any) {
-    // We mock the DB lookup of user's Whatsapp number for brevity
-    await this.whatsappService.sendMessage('user_phone', `🚨 Escrow Africa: A dispute has been opened on your transaction #${data.escrowId}. Please log in to provide evidence.`);
+  // Generic outbound WhatsApp send, used by dispute-service's bot once it has resolved a
+  // real phone number for a specific party. { to: E.164 phone (no leading '+'), message }
+  @EventPattern(KafkaEvents.WHATSAPP_SEND)
+  async handleWhatsappSend(@Payload() data: { to: string; message: string }) {
+    if (!data?.to || !data?.message) {
+      this.logger.warn('WHATSAPP_SEND event missing to/message', data);
+      return;
+    }
+    await this.whatsappService.sendMessage(data.to, data.message);
   }
 
-  @EventPattern(KafkaEvents.DISPUTE_UNDER_REVIEW)
-  async handleDisputeUnderReview(@Payload() data: any) {
-    await this.whatsappService.sendMessage('user_phone', `⚖️ Escrow Africa: Your dispute ${data.disputeId} is now under review by our arbitration team.`);
-  }
-
-  @EventPattern(KafkaEvents.DISPUTE_RESOLVED)
-  async handleDisputeResolved(@Payload() data: any) {
-    await this.whatsappService.sendMessage('user_phone', `✅ Escrow Africa: Your dispute ${data.disputeId} has been resolved! Resolution: ${data.resolution}`);
-  }
-
+  // Every new escrow is gated in PENDING_APPROVAL until the buyer approves via the link in
+  // this email - so the buyer always gets one, regardless of who created the escrow.
   @EventPattern(KafkaEvents.ESCROW_CREATED)
   async handleEscrowCreated(@Payload() data: any) {
-    // notify buyer that an escrow was created by the seller
-    const to = data.buyerEmail || data.buyerId || 'user_email';
-    const text = `Escrow created: An escrow (${data.escrowId}) for ₦${data.amount} has been created by the seller. Please fund your wallet to proceed.`;
-    try {
-      if (data.buyerEmail) await this.mailerService.sendMail(data.buyerEmail, 'Escrow created – action required', text);
-    } catch (e) {
-      this.logger.warn('Failed to send escrow-created email', e?.message || e);
+    const amountText = `₦${data.amount}`;
+
+    if (data.buyerEmail && data.approvalLink) {
+      const subject = 'Approve your escrow - action required';
+      const text = `An escrow (${data.escrowId}) for ${amountText} has been created and is awaiting your approval. Approve it here: ${data.approvalLink}`;
+      const html = this.buildApprovalEmailHtml(amountText, data.approvalLink);
+      try {
+        await this.mailerService.sendMail(data.buyerEmail, subject, text, html);
+      } catch (e) {
+        this.logger.warn('Failed to send escrow-approval email', e?.message || e);
+      }
     }
-    await this.whatsappService.sendMessage('user_phone', text);
+
+    // If the buyer created the escrow themselves, let the seller know one is pending the
+    // buyer's own approval; the seller hears again via ESCROW_APPROVED once that happens.
+    if (data.creatorRole === 'BUYER' && data.sellerEmail) {
+      const text = `A buyer has proposed an escrow (${data.escrowId}) for ${amountText}. It's pending the buyer's own approval before it becomes active - we'll notify you once that happens.`;
+      try {
+        await this.mailerService.sendMail(data.sellerEmail, 'Escrow proposed - awaiting buyer approval', text);
+      } catch (e) {
+        this.logger.warn('Failed to send escrow-proposed email', e?.message || e);
+      }
+    }
+    // NOTE: pre-existing gap, out of scope for the dispute WhatsApp bot work - WhatsApp
+    // notifications here still have no real phone number to send to. Needs the same
+    // phone-resolution treatment dispute-service now has before this can actually deliver.
+  }
+
+  @EventPattern(KafkaEvents.ESCROW_APPROVED)
+  async handleEscrowApproved(@Payload() data: any) {
+    if (!data?.sellerEmail) return;
+    const text = `Good news - the buyer approved escrow ${data.escrowId}. You can now proceed with the agreed milestones.`;
+    try {
+      await this.mailerService.sendMail(data.sellerEmail, 'Escrow approved by buyer', text);
+    } catch (e) {
+      this.logger.warn('Failed to send escrow-approved email', e?.message || e);
+    }
+  }
+
+  private buildApprovalEmailHtml(amountText: string, approvalLink: string) {
+    return `<!doctype html>
+<html><body style="margin:0;padding:0;background:#F5F7F8;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;">
+<div style="max-width:480px;margin:40px auto;background:#fff;border-radius:20px;padding:36px;box-shadow:0 20px 60px rgba(15,61,46,0.08);">
+  <h1 style="color:#0F3D2E;font-size:20px;margin:0 0 12px;">Approve your escrow</h1>
+  <p style="color:#4B5563;font-size:15px;line-height:1.5;margin:0 0 24px;">
+    An escrow for <strong>${amountText}</strong> has been created and is awaiting your approval before it becomes active.
+  </p>
+  <a href="${approvalLink}" style="display:inline-block;background:#0F3D2E;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:14px 28px;border-radius:12px;">Approve Escrow</a>
+  <p style="color:#9CA3AF;font-size:12px;line-height:1.5;margin:24px 0 0;">
+    If the button doesn't work, copy and paste this link into your browser:<br>${approvalLink}
+  </p>
+</div>
+</body></html>`;
   }
 
   @EventPattern(KafkaEvents.ESCROW_RELEASED)
@@ -53,7 +98,6 @@ export class NotificationController {
         this.logger.warn('Failed to send escrow-released email', e?.message || e);
       }
     }
-    await this.whatsappService.sendMessage('user_phone', text);
   }
 
   @EventPattern(KafkaEvents.ESCROW_RELEASE_FAILED)
@@ -66,28 +110,5 @@ export class NotificationController {
         this.logger.warn('Failed to send escrow-release-failed email', e?.message || e);
       }
     }
-    await this.whatsappService.sendMessage('user_phone', text);
-  }
-
-  @Post()
-  async handleIncomingMessage(@Body() payload: any) {
-    // Handling HTTP POST Webhooks directly from the WhatsApp integration provider
-    this.logger.log(`Received WhatsApp Webhook Payload: ${JSON.stringify(payload)}`);
-    
-    // Dummy parsing
-    const disputeId = payload.disputeId || 'DISPUTE_ID_EXTRACTED_FROM_CONTEXT';
-    const senderId = payload.from || 'SENDER_PHONE_NUMBER';
-    const text = payload.text || payload.body;
-    const attachmentUrl = payload.mediaUrl;
-
-    // Routing mapped payload quietly back to the dispute engine
-    this.kafkaClient.emit('WHATSAPP_EVIDENCE_RECEIVED', {
-      disputeId,
-      senderId,
-      text,
-      attachmentUrl
-    });
-
-    return { status: 'success' };
   }
 }

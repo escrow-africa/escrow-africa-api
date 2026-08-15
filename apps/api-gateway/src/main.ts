@@ -12,7 +12,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
-  app.enableCors();
+  app.enableCors({
+    origin: (process.env.FRONTEND_URL || 'http://localhost:3006').split(','),
+    credentials: true,
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -24,10 +27,11 @@ async function bootstrap() {
   const server: any = app.getHttpAdapter().getInstance();
   const serviceBases = {
     auth: process.env.AUTH_API_URL,
-    dispute: process.env.DISPUTE_API_URL,
+    disputes: process.env.DISPUTE_API_URL,
     escrow: process.env.ESCROW_API_URL,
     notification: process.env.NOTIFICATION_API_URL,
     wallet: process.env.WALLET_API_URL,
+    agent: process.env.AGENT_API_URL,
   };
   server.locals.serviceBases = serviceBases;
 

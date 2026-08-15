@@ -11,7 +11,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
-  app.enableCors();
+  // CORS is handled centrally by api-gateway, which is the only service browsers talk to directly.
   const port = 3002;
   await app.listen(port as any);
   Logger.log(

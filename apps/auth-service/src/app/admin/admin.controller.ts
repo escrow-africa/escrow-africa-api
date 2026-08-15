@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Req, Query } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
@@ -20,7 +20,7 @@ export class AdminController {
 
   @UseGuards(JwtAuthGuard)
   @Get()
-  findAllAdmins() {
-    return this.adminService.findAll();
+  findAllAdmins(@Query('page') page = '1', @Query('limit') limit = '20') {
+    return this.adminService.findAll(Number(page) || 1, Number(limit) || 20);
   }
 }
