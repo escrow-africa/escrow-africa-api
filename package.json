@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
+    "build": "nx run-many -t build --all",
     "start:gateway": "node apps/api-gateway/dist/main.js",
     "start:auth": "node apps/auth-service/dist/main.js",
     "start:agent": "node apps/agent-service/dist/main.js",
