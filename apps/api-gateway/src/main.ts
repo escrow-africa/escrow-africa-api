@@ -34,6 +34,10 @@ async function bootstrap() {
     // were none until now, only Kafka @EventPattern handlers) would 404 through the gateway.
     notifications: process.env.NOTIFICATION_API_URL,
     wallet: process.env.WALLET_API_URL,
+    // MonnifyController lives inside wallet-service (@Controller('monnify')) under a different
+    // route prefix than WalletController - Monnify's own servers call this webhook directly, so
+    // without this mount it 404s at the gateway the same way whatsapp/notifications did.
+    monnify: process.env.WALLET_API_URL,
     agent: process.env.AGENT_API_URL,
     // WhatsappController lives inside dispute-service (@Controller('whatsapp')) alongside
     // DisputeController, but under a different route prefix — without this mount, inbound
