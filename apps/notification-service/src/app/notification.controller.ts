@@ -3,9 +3,10 @@ import { EventPattern, Payload } from '@nestjs/microservices';
 import { KafkaEvents } from '@org/kafka';
 import { WhatsappService } from './whatsapp.service';
 import { MailerService } from './mailer.service';
+import { NotificationService } from './notification/notification.service';
 
-// Pure notification-sending service: reacts to lifecycle events and performs the actual
-// outbound delivery (email, WhatsApp). It does not own any dispute/escrow domain logic or
+// Reacts to lifecycle events and performs outbound delivery (email, WhatsApp) plus persisting
+// an in-app Notification row per affected user. Does not own any dispute/escrow domain logic or
 // inbound WhatsApp webhook handling - that lives in dispute-service, which has direct access
 // to the data needed to resolve a phone number to a user and dispute, and to enforce that
 // buyer and seller are only ever messaged separately. See WHATSAPP_SEND below.
@@ -16,6 +17,7 @@ export class NotificationController {
   constructor(
     private readonly whatsappService: WhatsappService,
     private readonly mailerService: MailerService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   // Generic outbound WhatsApp send, used by dispute-service's bot once it has resolved a
@@ -41,7 +43,7 @@ export class NotificationController {
       const html = this.buildApprovalEmailHtml(amountText, data.approvalLink);
       try {
         await this.mailerService.sendMail(data.buyerEmail, subject, text, html);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn('Failed to send escrow-approval email', e?.message || e);
       }
     }
@@ -52,24 +54,47 @@ export class NotificationController {
       const text = `A buyer has proposed an escrow (${data.escrowId}) for ${amountText}. It's pending the buyer's own approval before it becomes active - we'll notify you once that happens.`;
       try {
         await this.mailerService.sendMail(data.sellerEmail, 'Escrow proposed - awaiting buyer approval', text);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn('Failed to send escrow-proposed email', e?.message || e);
       }
     }
     // NOTE: pre-existing gap, out of scope for the dispute WhatsApp bot work - WhatsApp
     // notifications here still have no real phone number to send to. Needs the same
     // phone-resolution treatment dispute-service now has before this can actually deliver.
+
+    await this.notificationService.recordForUser(data.buyerId, {
+      type: 'ESCROW_CREATED',
+      title: 'Approve your escrow',
+      message: `An escrow (${data.escrowId}) for ${amountText} is awaiting your approval.`,
+      relatedEntityId: data.escrowId,
+    });
+    if (data.creatorRole === 'BUYER' && data.sellerId) {
+      await this.notificationService.recordForUser(data.sellerId, {
+        type: 'ESCROW_CREATED',
+        title: 'Escrow proposed',
+        message: `A buyer has proposed an escrow (${data.escrowId}) for ${amountText}, pending their approval.`,
+        relatedEntityId: data.escrowId,
+      });
+    }
   }
 
   @EventPattern(KafkaEvents.ESCROW_APPROVED)
   async handleEscrowApproved(@Payload() data: any) {
-    if (!data?.sellerEmail) return;
     const text = `Good news - the buyer approved escrow ${data.escrowId}. You can now proceed with the agreed milestones.`;
-    try {
-      await this.mailerService.sendMail(data.sellerEmail, 'Escrow approved by buyer', text);
-    } catch (e) {
-      this.logger.warn('Failed to send escrow-approved email', e?.message || e);
+    if (data?.sellerEmail) {
+      try {
+        await this.mailerService.sendMail(data.sellerEmail, 'Escrow approved by buyer', text);
+      } catch (e: any) {
+        this.logger.warn('Failed to send escrow-approved email', e?.message || e);
+      }
     }
+
+    await this.notificationService.recordForUser(data.sellerId, {
+      type: 'ESCROW_APPROVED',
+      title: 'Escrow approved',
+      message: text,
+      relatedEntityId: data.escrowId,
+    });
   }
 
   private buildApprovalEmailHtml(amountText: string, approvalLink: string) {
@@ -94,10 +119,23 @@ export class NotificationController {
     if (data.buyerEmail) {
       try {
         await this.mailerService.sendMail(data.buyerEmail, 'Escrow released', text);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn('Failed to send escrow-released email', e?.message || e);
       }
     }
+
+    await this.notificationService.recordForUser(data.buyerId, {
+      type: 'ESCROW_RELEASED',
+      title: 'Escrow released',
+      message: text,
+      relatedEntityId: data.escrowId,
+    });
+    await this.notificationService.recordForUser(data.sellerId, {
+      type: 'ESCROW_RELEASED',
+      title: 'Funds released to you',
+      message: `Escrow ${data.escrowId} was released — ₦${data.amount} (before fees) is on its way to you.`,
+      relatedEntityId: data.escrowId,
+    });
   }
 
   @EventPattern(KafkaEvents.ESCROW_RELEASE_FAILED)
@@ -106,9 +144,70 @@ export class NotificationController {
     if (data.buyerEmail) {
       try {
         await this.mailerService.sendMail(data.buyerEmail, 'Escrow release attempt failed', text);
-      } catch (e) {
+      } catch (e: any) {
         this.logger.warn('Failed to send escrow-release-failed email', e?.message || e);
       }
+    }
+
+    await this.notificationService.recordForUser(data.buyerId, {
+      type: 'ESCROW_RELEASE_FAILED',
+      title: 'Escrow release attempt failed',
+      message: text,
+      relatedEntityId: data.escrowId,
+    });
+  }
+
+  // Best-effort in-app notifications for both parties on a dispute's lifecycle. Uses
+  // getEscrowParties() since these Kafka payloads only carry escrowId, not buyer/sellerId.
+  @EventPattern(KafkaEvents.DISPUTE_OPENED)
+  async handleDisputeOpened(@Payload() data: any) {
+    try {
+      const parties = await this.notificationService.getEscrowParties(data.escrowId);
+      if (!parties) return;
+
+      const message = `A dispute has been opened on your escrow transaction (${data.escrowId}).`;
+      await Promise.all([
+        this.notificationService.recordForUser(parties.buyerId, {
+          type: 'DISPUTE_OPENED',
+          title: 'Dispute opened',
+          message,
+          relatedEntityId: data.disputeId,
+        }),
+        this.notificationService.recordForUser(parties.sellerId, {
+          type: 'DISPUTE_OPENED',
+          title: 'Dispute opened',
+          message,
+          relatedEntityId: data.disputeId,
+        }),
+      ]);
+    } catch (e: any) {
+      this.logger.warn('Failed to record DISPUTE_OPENED notifications', e?.message || e);
+    }
+  }
+
+  @EventPattern(KafkaEvents.DISPUTE_RESOLVED)
+  async handleDisputeResolved(@Payload() data: any) {
+    try {
+      const parties = await this.notificationService.getEscrowParties(data.escrowId);
+      if (!parties) return;
+
+      const message = `Dispute on escrow ${data.escrowId} has been resolved.${data.resolution ? ` ${data.resolution}` : ''}`;
+      await Promise.all([
+        this.notificationService.recordForUser(parties.buyerId, {
+          type: 'DISPUTE_RESOLVED',
+          title: 'Dispute resolved',
+          message,
+          relatedEntityId: data.disputeId,
+        }),
+        this.notificationService.recordForUser(parties.sellerId, {
+          type: 'DISPUTE_RESOLVED',
+          title: 'Dispute resolved',
+          message,
+          relatedEntityId: data.disputeId,
+        }),
+      ]);
+    } catch (e: any) {
+      this.logger.warn('Failed to record DISPUTE_RESOLVED notifications', e?.message || e);
     }
   }
 }

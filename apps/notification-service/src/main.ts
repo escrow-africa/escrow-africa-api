@@ -3,15 +3,17 @@
  * This is only a minimal backend to get started.
  */
 
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import { getKafkaClientConfig } from '@org/kafka';
 import { AppModule } from './app/app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
+  app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   // CORS is handled centrally by api-gateway, which is the only service browsers talk to directly.
 
   // Without this, every @EventPattern handler in this service is dead code: ClientsModule
@@ -22,8 +24,7 @@ async function bootstrap() {
     transport: Transport.KAFKA,
     options: {
       client: {
-        clientId: 'notification-service',
-        brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+        ...getKafkaClientConfig('notification-service'),
         retry: { retries: 30, maxRetryTime: 30000 },
       },
       consumer: {

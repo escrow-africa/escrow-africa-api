@@ -29,9 +29,18 @@ async function bootstrap() {
     auth: process.env.AUTH_API_URL,
     disputes: process.env.DISPUTE_API_URL,
     escrow: process.env.ESCROW_API_URL,
-    notification: process.env.NOTIFICATION_API_URL,
+    // Mount key must match notification-service's @Controller('notifications') (plural) —
+    // the singular key previously here meant any HTTP route added to that controller (there
+    // were none until now, only Kafka @EventPattern handlers) would 404 through the gateway.
+    notifications: process.env.NOTIFICATION_API_URL,
     wallet: process.env.WALLET_API_URL,
     agent: process.env.AGENT_API_URL,
+    // WhatsappController lives inside dispute-service (@Controller('whatsapp')) alongside
+    // DisputeController, but under a different route prefix — without this mount, inbound
+    // Meta/360dialog webhook callbacks to /api/whatsapp/* 404 at the gateway and never reach
+    // dispute-service, making the WhatsApp dispute bot (including the AI review trigger)
+    // completely unreachable from outside the cluster.
+    whatsapp: process.env.DISPUTE_API_URL,
   };
   server.locals.serviceBases = serviceBases;
 

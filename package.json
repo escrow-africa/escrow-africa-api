@@ -64,7 +64,6 @@
     "libs/*"
   ],
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.115.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.3",
@@ -88,6 +87,7 @@
     "mongoose": "^9.3.1",
     "multer": "^2.2.0",
     "nodemailer": "^8.0.8",
+    "openai": "^7.5.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0",

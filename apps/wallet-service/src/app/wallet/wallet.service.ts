@@ -94,7 +94,7 @@ export class WalletService {
 		const resp = await this.monnify.authorizeCardOtp(tokenId, token, txRef);
 		// persist provider response
 		if (txRef && txn) {
-			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...(txn?.metadata || {}), ...(resp.raw || {}) } } });
+			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn?.metadata as any) || {}), ...(resp.raw || {}) } } });
 		}
 
 		// if provider indicates success, credit wallet
@@ -317,5 +317,65 @@ export class WalletService {
 
 	async fetchTransactions(userId: string, page = 1, limit = 20, type?: string) {
 		return this.transactionService.fetchTransactions(userId, page, limit, type);
+	}
+
+	async listPayoutAccounts(userId: string) {
+		return this.prisma.payoutAccount.findMany({
+			where: { userId },
+			orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+		});
+	}
+
+	async addPayoutAccount(userId: string, data: { bankName: string; bankCode: string; accountNumber: string; accountName: string }) {
+		const existingCount = await this.prisma.payoutAccount.count({ where: { userId } });
+
+		return this.prisma.payoutAccount.create({
+			data: {
+				userId,
+				bankName: data.bankName,
+				bankCode: data.bankCode,
+				accountNumber: data.accountNumber,
+				accountName: data.accountName,
+				// first account a user adds becomes their default automatically
+				isDefault: existingCount === 0,
+			},
+		});
+	}
+
+	async deletePayoutAccount(userId: string, accountId: string) {
+		const account = await this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
+		if (!account || account.userId !== userId) {
+			throw new NotFoundException('Payout account not found');
+		}
+
+		await this.prisma.payoutAccount.delete({ where: { id: accountId } });
+
+		// promote the most recently added remaining account so a default always exists once
+		// at least one payout account is left
+		if (account.isDefault) {
+			const next = await this.prisma.payoutAccount.findFirst({
+				where: { userId },
+				orderBy: { createdAt: 'desc' },
+			});
+			if (next) {
+				await this.prisma.payoutAccount.update({ where: { id: next.id }, data: { isDefault: true } });
+			}
+		}
+
+		return { message: 'Payout account removed' };
+	}
+
+	async setDefaultPayoutAccount(userId: string, accountId: string) {
+		const account = await this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
+		if (!account || account.userId !== userId) {
+			throw new NotFoundException('Payout account not found');
+		}
+
+		await this.prisma.$transaction([
+			this.prisma.payoutAccount.updateMany({ where: { userId, isDefault: true }, data: { isDefault: false } }),
+			this.prisma.payoutAccount.update({ where: { id: accountId }, data: { isDefault: true } }),
+		]);
+
+		return this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
 	}
 }

@@ -316,7 +316,12 @@ export class EscrowService implements OnModuleDestroy {
 		if (!escrow) {
 			throw new NotFoundException('Escrow not found');
 		}
-		if (escrow.status !== 'CREATED' && escrow.status !== 'PENDING_PAYMENT') {
+		// CREATED/PENDING_PAYMENT are legacy pre-approval statuses that createEscrowDetailed()
+		// no longer assigns (every escrow now starts at PENDING_APPROVAL) - kept here only in
+		// case a future payment-webhook path reintroduces them. IN_PROGRESS is the real status
+		// every escrow is actually in once approveByBuyer() clears it for funding/delivery.
+		const fundableStatuses = ['CREATED', 'PENDING_PAYMENT', 'IN_PROGRESS'];
+		if (!fundableStatuses.includes(escrow.status)) {
 			throw new BadRequestException('Escrow cannot be funded in its current state');
 		}
 

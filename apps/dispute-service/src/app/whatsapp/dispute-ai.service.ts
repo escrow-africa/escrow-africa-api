@@ -1,7 +1,7 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ClientKafka } from '@nestjs/microservices';
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import OpenAI from 'openai';
+import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
 import axios from 'axios';
 import { KafkaEvents } from '@org/kafka';
@@ -20,15 +20,16 @@ const VerdictSchema = z.object({
 @Injectable()
 export class DisputeAiService {
   private readonly logger = new Logger(DisputeAiService.name);
-  private readonly client: Anthropic | null;
+  private readonly client: OpenAI | null;
+  private readonly model = process.env.OPENAI_MODEL || 'gpt-4o';
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly disputeService: DisputeService,
     @Inject('KAFKA_SERVICE') private readonly kafkaClient: ClientKafka,
   ) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    this.client = apiKey ? new Anthropic({ apiKey }) : null;
+    const apiKey = process.env.OPENAI_API_KEY;
+    this.client = apiKey ? new OpenAI({ apiKey }) : null;
   }
 
   private notify(phone: string | null | undefined, message: string) {
@@ -38,7 +39,7 @@ export class DisputeAiService {
 
   async reviewAndDecide(disputeId: string) {
     if (!this.client) {
-      this.logger.warn('ANTHROPIC_API_KEY not configured; skipping AI review');
+      this.logger.warn('OPENAI_API_KEY not configured; skipping AI review');
       return;
     }
 
@@ -55,7 +56,7 @@ export class DisputeAiService {
 
     const evidence = await this.prisma.evidence.findMany({ where: { disputeId }, orderBy: { createdAt: 'asc' } });
 
-    const content: Anthropic.MessageParam['content'] = [
+    const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
       {
         type: 'text',
         text: [
@@ -71,7 +72,7 @@ export class DisputeAiService {
           `Evidence items submitted: ${evidence.length}`,
         ].join('\n'),
       },
-    ] as any;
+    ];
 
     for (const item of evidence) {
       const submitter = item.uploadedById === buyer?.id ? 'buyer' : item.uploadedById === seller?.id ? 'seller' : 'unknown';
@@ -82,14 +83,14 @@ export class DisputeAiService {
         try {
           const res = await axios.get(sourceUrl, { responseType: 'arraybuffer' });
           const base64 = Buffer.from(res.data).toString('base64');
-          (content as any[]).push({ type: 'image', source: { type: 'base64', media_type: item.mimeType, data: base64 } });
-          (content as any[]).push({ type: 'text', text: `^ Evidence "${item.fileName}", submitted by the ${submitter}.` });
+          content.push({ type: 'image_url', image_url: { url: `data:${item.mimeType};base64,${base64}` } });
+          content.push({ type: 'text', text: `^ Evidence "${item.fileName}", submitted by the ${submitter}.` });
         } catch (err) {
           this.logger.warn(`Failed to fetch evidence image ${item.id}: ${(err as Error).message}`);
-          (content as any[]).push({ type: 'text', text: `(Could not load image evidence "${item.fileName}" submitted by the ${submitter})` });
+          content.push({ type: 'text', text: `(Could not load image evidence "${item.fileName}" submitted by the ${submitter})` });
         }
       } else {
-        (content as any[]).push({
+        content.push({
           type: 'text',
           text: `Non-image evidence "${item.fileName}" (${item.mimeType}) submitted by the ${submitter}: ${sourceUrl}`,
         });
@@ -98,25 +99,31 @@ export class DisputeAiService {
 
     let result: z.infer<typeof VerdictSchema>;
     try {
-      const response = await this.client.messages.parse({
-        model: 'claude-opus-5',
-        max_tokens: 8000,
-        system:
-          'You are an impartial dispute mediator for Escrow Africa, an escrow payment platform. ' +
-          'A buyer and a seller are in a dispute over an escrow transaction. Review the case details and ' +
-          'evidence provided and decide whether the escrowed funds should be released to the seller or ' +
-          'refunded to the buyer. Base your decision only on the evidence given. Only return a confident ' +
-          'verdict (RELEASE_TO_SELLER or REFUND_BUYER) if the evidence clearly supports one party. If the ' +
-          'evidence is inconclusive, contradictory, missing, or insufficient to judge fairly, return ' +
-          'NEEDS_HUMAN_REVIEW with a low confidence score instead of guessing.',
-        messages: [{ role: 'user', content }],
-        output_config: { format: zodOutputFormat(VerdictSchema) },
+      const response = await this.client.chat.completions.parse({
+        model: this.model,
+        max_completion_tokens: 8000,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an impartial dispute mediator for Escrow Africa, an escrow payment platform. ' +
+              'A buyer and a seller are in a dispute over an escrow transaction. Review the case details and ' +
+              'evidence provided and decide whether the escrowed funds should be released to the seller or ' +
+              'refunded to the buyer. Base your decision only on the evidence given. Only return a confident ' +
+              'verdict (RELEASE_TO_SELLER or REFUND_BUYER) if the evidence clearly supports one party. If the ' +
+              'evidence is inconclusive, contradictory, missing, or insufficient to judge fairly, return ' +
+              'NEEDS_HUMAN_REVIEW with a low confidence score instead of guessing.',
+          },
+          { role: 'user', content },
+        ],
+        response_format: zodResponseFormat(VerdictSchema, 'verdict'),
       });
 
-      if (!response.parsed_output) throw new Error('AI response failed schema validation');
-      result = response.parsed_output;
+      const parsed = response.choices[0]?.message?.parsed;
+      if (!parsed) throw new Error('AI response failed schema validation');
+      result = parsed;
     } catch (err) {
-      this.logger.error(`Claude review failed for dispute ${disputeId}: ${(err as Error).message}`);
+      this.logger.error(`AI review failed for dispute ${disputeId}: ${(err as Error).message}`);
       result = { verdict: 'NEEDS_HUMAN_REVIEW', confidence: 0, reasoning: 'The AI review could not complete due to a technical error.' };
     }
 
