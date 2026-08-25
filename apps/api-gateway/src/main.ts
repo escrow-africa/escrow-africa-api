@@ -46,6 +46,14 @@ async function bootstrap() {
 
   // Register proxy middleware for each service under /api/<service>
   Object.entries(serviceBases).forEach(([key, target]) => {
+    if (!target) {
+      // A missing target (e.g. AGENT_API_URL unset because that service isn't deployed in this
+      // environment) must not take down the whole gateway - createProxyMiddleware() throws
+      // synchronously on an undefined target, which previously crashed bootstrap() entirely and,
+      // via concurrently -k, killed every other service along with it.
+      console.warn(`Skipping proxy mount for ${key}: no target URL configured`);
+      return;
+    }
     console.log(`Setting up proxy for ${key} at /api/${key} -> ${target}`);
     if (String(target).endsWith('/api')) {
       console.warn(`Target for ${key} includes trailing /api — proxied paths may double-up. Consider removing /api from the target URL.`);
