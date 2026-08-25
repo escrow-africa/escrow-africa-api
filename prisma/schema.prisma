@@ -14,10 +14,111 @@ model User {
   isEmailVerified Boolean  @default(false)
   password       String
   referrerId     String?
+  bio            String?
+  avatarUrl      String?
+  companyName    String?
+  vatId          String?
+  billingAddress String?
+  isActive       Boolean  @default(true)
+  currency       String   @default("NGN")
+  language       String   @default("en-US")
+  timezone       String   @default("GMT+1")
+  subscriptionTier      SubscriptionTier @default(FREE)
+  subscriptionRenewsAt  DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  referrer       Agent?   @relation("UserReferrer", fields: [referrerId], references: [id])
+  referrer                Agent?                   @relation("UserReferrer", fields: [referrerId], references: [id])
+  notificationPreference  NotificationPreference?
+  kycSubmissions          Kyc[]
+  sessions                Session[]
+  subscriptionEvents      SubscriptionEvent[]
+  supportTickets          SupportTicket[]
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  PREMIUM
+}
+
+model SubscriptionEvent {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  tier      SubscriptionTier
+  amount    Decimal
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model SupportTicket {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id])
+  subject   String
+  message   String
+  status    SupportTicketStatus @default(OPEN)
+  createdAt DateTime            @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+enum SupportTicketStatus {
+  OPEN
+  CLOSED
+}
+
+model NotificationPreference {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  user                      User     @relation(fields: [userId], references: [id])
+  escrowContractReleases    Boolean  @default(true)
+  dispersalClearingAlerts   Boolean  @default(true)
+  disputeArbitrationWarning Boolean  @default(true)
+  tipsPromotionalAnalytics  Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+model Kyc {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  documentType    String
+  documentUrl     String
+  status          KycStatus @default(PENDING)
+  rejectionReason String?
+  submittedAt     DateTime  @default(now())
+  reviewedAt      DateTime?
+
+  @@index([userId, submittedAt(sort: Desc)])
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Session {
+  id         String            @id @default(uuid())
+  userId     String
+  user       User              @relation(fields: [userId], references: [id])
+  deviceType SessionDeviceType @default(DESKTOP)
+  browser    String?
+  ip         String?
+  userAgent  String?
+  revokedAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@index([userId])
+}
+
+enum SessionDeviceType {
+  DESKTOP
+  MOBILE
 }
 
 model Agent {
@@ -165,6 +266,45 @@ model Wallet {
   providerAccountReference String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PayoutAccount {
+  id            String   @id @default(uuid())
+  userId        String
+  bankName      String
+  bankCode      String
+  accountNumber String
+  accountName   String
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Notification {
+  id                String             @id @default(uuid())
+  userId            String
+  type              NotificationType
+  title             String
+  message           String
+  relatedEntityId   String?
+  link              String?
+  read              Boolean            @default(false)
+  readAt            DateTime?
+  createdAt         DateTime           @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, read])
+}
+
+enum NotificationType {
+  ESCROW_CREATED
+  ESCROW_APPROVED
+  ESCROW_RELEASED
+  ESCROW_RELEASE_FAILED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
 }
 
 model Escrow {

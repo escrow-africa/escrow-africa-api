@@ -1,8 +1,9 @@
-import { Controller, Post, Body, Get, Req, UseGuards, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Req, UseGuards, Query, Delete, Patch, Param } from '@nestjs/common';
 import { type Request } from 'express';
 import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
 import { CardOtpDto } from './dto/card-otp.dto';
+import { CreatePayoutAccountDto } from './dto/payout-account.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../../decorators/public.decorator';
 
@@ -73,5 +74,29 @@ export class WalletController {
     const p = Number(page) || 1;
     const l = Number(limit) || 20;
     return this.walletService.fetchTransactions(userId, p, l, type);
+  }
+
+  @Get('payout-accounts')
+  async listPayoutAccounts(@Req() req: Request) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.listPayoutAccounts(userId);
+  }
+
+  @Post('payout-accounts')
+  async addPayoutAccount(@Req() req: Request, @Body() dto: CreatePayoutAccountDto) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.addPayoutAccount(userId, dto);
+  }
+
+  @Delete('payout-accounts/:id')
+  async deletePayoutAccount(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.deletePayoutAccount(userId, id);
+  }
+
+  @Patch('payout-accounts/:id/default')
+  async setDefaultPayoutAccount(@Req() req: Request, @Param('id') id: string) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.setDefaultPayoutAccount(userId, id);
   }
 }

@@ -6,6 +6,7 @@
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import { getKafkaClientConfig } from '@org/kafka';
 import { AppModule } from './app/app.module';
 
 async function bootstrap() {
@@ -22,8 +23,7 @@ async function bootstrap() {
     transport: Transport.KAFKA,
     options: {
       client: {
-        clientId: 'escrow-service',
-        brokers: [process.env.KAFKA_BROKER || 'localhost:9092'],
+        ...getKafkaClientConfig('escrow-service'),
         retry: { retries: 30, maxRetryTime: 30000 },
       },
       consumer: {

@@ -11,9 +11,11 @@ import axios from 'axios';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { UserService } from '../user/user.service';
 import { OtpService } from '../otp/otp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { parseUserAgent } from './utils/parse-user-agent';
 
 @Injectable()
 export class AuthService {
@@ -24,9 +26,9 @@ export class AuthService {
     private readonly prisma: PrismaService,
   ) {}
 
-  generateAccessToken(userId: string, email: string) {
+  generateAccessToken(userId: string, email: string, sessionId?: string) {
     return this.jwtService.sign(
-      { sub: userId, email },
+      { sub: userId, email, sessionId },
       { expiresIn: (process.env.JWT_EXPIRE) as any },
     );
   }
@@ -107,10 +109,21 @@ export class AuthService {
     };
   }
 
-  async login(data: any) {
+  async login(data: any, deviceMeta: { userAgent?: string; ip?: string } = {}) {
+    const { browser, deviceType } = parseUserAgent(deviceMeta.userAgent);
+    const session = await this.prisma.session.create({
+      data: {
+        userId: data.id,
+        browser,
+        deviceType: deviceType as any,
+        ip: deviceMeta.ip,
+        userAgent: deviceMeta.userAgent,
+      },
+    });
+
     return {
       user: data,
-      accessToken: this.generateAccessToken(data.id, data.email),
+      accessToken: this.generateAccessToken(data.id, data.email, session.id),
     };
   }
 
@@ -172,6 +185,72 @@ export class AuthService {
       password: bcrypt.hashSync(newPassword, 10),
     });
     return { message: 'Password reset successful' };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    const isCurrentPasswordCorrect = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!isCurrentPasswordCorrect) {
+      throw new BadRequestException('Current password is incorrect');
+    }
+
+    await this.userService.findByIdAndUpdate(userId, {
+      password: bcrypt.hashSync(dto.newPassword, 10),
+    });
+
+    return { message: 'Password changed successfully' };
+  }
+
+  async deactivateAccount(userId: string) {
+    const user = await this.userService.findById(userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { isActive: false } }),
+      this.prisma.session.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    return { message: 'Account deactivated' };
+  }
+
+  async listSessions(userId: string, currentSessionId?: string) {
+    const sessions = await this.prisma.session.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      browser: s.browser,
+      type: s.deviceType.toLowerCase(),
+      ip: s.ip,
+      isActive: !s.revokedAt,
+      isCurrent: s.id === currentSessionId,
+      createdAt: s.createdAt,
+    }));
+  }
+
+  async revokeOtherSessions(userId: string, currentSessionId?: string) {
+    await this.prisma.session.updateMany({
+      where: { userId, revokedAt: null, ...(currentSessionId ? { NOT: { id: currentSessionId } } : {}) },
+      data: { revokedAt: new Date() },
+    });
+    return { message: 'Other sessions revoked' };
+  }
+
+  async revokeSession(userId: string, sessionId: string) {
+    const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+    if (!session || session.userId !== userId) {
+      throw new NotFoundException('Session not found');
+    }
+
+    await this.prisma.session.update({ where: { id: sessionId }, data: { revokedAt: new Date() } });
+    return { message: 'Session revoked' };
   }
 
   async getUserDetails(userId: string) {
