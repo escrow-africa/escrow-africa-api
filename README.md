@@ -1,4 +1,4 @@
-# Escrow Africa — Backend
+# Escrow Africa Backend
 
 This repository contains the backend services for Escrow Africa, implemented as a NestJS-based Nx monorepo. It powers the auth, wallet, escrow, dispute, notification, and gateway layers that support the platform.
 
