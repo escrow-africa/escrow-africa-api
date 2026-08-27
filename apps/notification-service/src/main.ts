@@ -33,13 +33,10 @@ async function bootstrap() {
     },
   });
 
-  const port = 3004;
-  // Bound to loopback only: this service is internal-only, reached exclusively through
-  // api-gateway. On Render, all 6 services in this container listen on their own port, and
-  // Render's port auto-detection can't tell which one is "the" service - if this bound on all
-  // interfaces (the listen() default), Render's scanner could lock onto it after a restart and
-  // route external traffic here instead of to the gateway, exactly as happened in production.
-  await app.listen(port as any, '127.0.0.1');
+  // Deployed as its own Render Private Service, not publicly reachable - PORT is whatever
+  // Render assigns that service; 3004 remains the local-dev default only.
+  const port = process.env.PORT || 3004;
+  await app.listen(port as any);
   Logger.log(
     `🚀 Application is running on: http://localhost:${port}/${globalPrefix}`
   );
