@@ -25,15 +25,27 @@ export class SettingsService {
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    await this.getUserOrThrow(userId);
+    const user = await this.getUserOrThrow(userId);
 
-    const fullName = dto.fullName || (dto.firstName || dto.lastName
-      ? `${dto.firstName || ''} ${dto.lastName || ''}`.trim()
-      : undefined);
+    // firstName/lastName are the source of truth; fullName is kept in sync for the other
+    // services that still read it (wallet-service's Monnify customer name, mailer templates,
+    // escrow buyer/seller display). If only fullName is sent, split it to keep both in sync.
+    let firstName = dto.firstName;
+    let lastName = dto.lastName;
+    if (!firstName && !lastName && dto.fullName) {
+      const [first, ...rest] = dto.fullName.trim().split(' ');
+      firstName = first;
+      lastName = rest.join(' ');
+    }
+    const fullName = firstName || lastName
+      ? `${firstName ?? user.firstName} ${lastName ?? user.lastName}`.trim()
+      : dto.fullName;
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
+        ...(firstName ? { firstName } : {}),
+        ...(lastName !== undefined ? { lastName } : {}),
         ...(fullName ? { fullName } : {}),
         ...(dto.email ? { email: dto.email } : {}),
         ...(dto.bio !== undefined ? { bio: dto.bio } : {}),

@@ -13,7 +13,9 @@ async function bootstrap() {
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
   app.enableCors({
-    origin: (process.env.FRONTEND_URL || 'http://localhost:3006').split(','),
+    origin: (`${process.env.FRONTEND_URL}`)
+      .split(',')
+      .map((url) => url.trim()),
     credentials: true,
   });
   app.useGlobalPipes(
