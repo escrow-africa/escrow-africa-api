@@ -1,6 +1,6 @@
 import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export class RegisterDto {
+export class WaitlistDto {
   @IsNotEmpty()
   @IsString()
   firstName!: string;
@@ -9,19 +9,10 @@ export class RegisterDto {
   @IsString()
   lastName!: string;
 
-  @IsEmail()
-  email!: string;
-
-  @IsNotEmpty()
-  phone!: string;
-
-  @IsNotEmpty()
-  createPassword!: string;
-
-  @IsNotEmpty()
-  confirmPassword!: string;
-
   @IsOptional()
   @IsString()
-  referralCode?: string;
+  phone?: string;
+
+  @IsEmail()
+  email!: string;
 }

@@ -11,6 +11,7 @@ import axios from 'axios';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { RegisterDto } from './dto/register.dto';
+import { WaitlistDto } from './dto/waitlist.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UserService } from '../user/user.service';
 import { OtpService } from '../otp/otp.service';
@@ -56,7 +57,12 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
-    const { fullName, email, phone, password, referralCode } = registerDto;
+    const { firstName, lastName, email, phone, createPassword, confirmPassword, referralCode } = registerDto;
+    const fullName = `${firstName} ${lastName}`.trim();
+
+    if (createPassword !== confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
 
     const isExisting = await this.userService.findOne(email);
 
@@ -80,10 +86,12 @@ export class AuthService {
     }
 
     const user = await this.userService.create({
+      firstName,
+      lastName,
       fullName,
       email,
       phone,
-      password,
+      password: createPassword,
       referrerId,
     });
 
@@ -107,6 +115,24 @@ export class AuthService {
       message: 'Registration successful, OTP sent to email',
       userId: user.id,
     };
+  }
+
+  async joinWaitlist(dto: WaitlistDto) {
+    const existing = await this.prisma.waitlistEntry.findUnique({ where: { email: dto.email } });
+    if (existing) {
+      return { message: "You're already on the waitlist" };
+    }
+
+    await this.prisma.waitlistEntry.create({
+      data: {
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        email: dto.email,
+        phone: dto.phone,
+      },
+    });
+
+    return { message: 'Added to the waitlist successfully' };
   }
 
   async login(data: any, deviceMeta: { userAgent?: string; ip?: string } = {}) {

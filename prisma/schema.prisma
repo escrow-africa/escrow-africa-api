@@ -8,6 +8,11 @@ datasource db {
 
 model User {
   id             String   @id @default(uuid())
+  firstName      String
+  lastName       String
+  // Kept in sync automatically wherever firstName/lastName are written - other services
+  // (wallet-service's Monnify customer name, mailer templates, escrow buyer/seller display)
+  // still read this single combined field and weren't in scope to change.
   fullName       String
   email          String   @unique
   phone          String
@@ -40,6 +45,15 @@ enum SubscriptionTier {
   FREE
   PRO
   PREMIUM
+}
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String?
+  createdAt DateTime @default(now())
 }
 
 model SubscriptionEvent {

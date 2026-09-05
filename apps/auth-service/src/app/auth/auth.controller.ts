@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, Post, UseGuards, Request, Get, Delete, Param } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
+import { WaitlistDto } from './dto/waitlist.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -14,6 +15,12 @@ export class AuthController {
   @Post('register')
   register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
+  }
+
+  @Post('waitlist')
+  @HttpCode(200)
+  joinWaitlist(@Body() waitlistDto: WaitlistDto) {
+    return this.authService.joinWaitlist(waitlistDto);
   }
 
   @UseGuards(LocalAuthGuard)
