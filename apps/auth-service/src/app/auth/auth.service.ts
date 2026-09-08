@@ -98,16 +98,20 @@ export class AuthService {
     // create and store OTP for email verification
     await this.otpService.create(email);
 
-    // create a wallet for the user by calling the wallet service
-      const baseUrl = process.env.API_BASE_URL;
-      try {
-        const normalized = String(baseUrl).replace(/\/+$/, '');
-        const walletUrl = `${normalized}/wallet/create`;
-        // Request wallet creation with provider (strict) - fail registration if provider creation fails
-        await axios.post(walletUrl, { userId: user.id });
+    // Create a wallet by calling wallet-service directly - not via API_BASE_URL/api-gateway.
+    // API_BASE_URL is this deployment's own public base URL (used elsewhere for user-facing
+    // links, e.g. escrow-service's approval email link); it has no relation to wallet-service's
+    // address and, once each service is deployed separately, isn't even guaranteed to be set on
+    // auth-service at all. WALLET_API_URL is the correct, already-required env var every other
+    // service uses to reach wallet-service.
+    const walletServiceUrl = process.env.WALLET_API_URL || 'http://localhost:3005';
+    try {
+      const normalized = String(walletServiceUrl).replace(/\/+$/, '');
+      const walletUrl = `${normalized}/api/wallet/create`;
+      // Non-blocking: a wallet-service hiccup shouldn't fail the whole registration.
+      await axios.post(walletUrl, { userId: user.id });
+      console.log('Wallet created for user', user.id);
     } catch (err) {
-      console.log({ err });
-      // don't block registration if wallet creation fails; log and continue
       console.warn('Wallet creation failed for user', user.id, (err as any)?.message || err);
     }
 
