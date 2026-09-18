@@ -46,16 +46,15 @@ export class MailerService {
       '',
       'Escrow Africa is a secure escrow platform for buyers and sellers doing business across Africa. ' +
         'When you agree on a deal, the buyer\'s funds are held safely in escrow until the work is delivered ' +
-        'and confirmed - so buyers only pay for what they actually receive, and sellers know their payment ' +
+        'and confirmed, so buyers only pay for what they actually receive, and sellers know their payment ' +
         'is already secured before they start. If anything goes wrong, our dispute resolution process ' +
         '(backed by both AI review and human mediators) is there to sort it out fairly.',
       '',
       "Here's what happens next:",
       '- We\'re rolling out access in waves, and your spot is now reserved.',
-      '- The moment your access opens up, we\'ll email you a link to create your account - no action needed from you until then.',
+      '- The moment your access opens up, we\'ll email you a link to create your account, no action needed from you until then.',
       '- Early waitlist members get first access to our launch pricing.',
       '',
-      'Got questions in the meantime? Just reply to this email - a real person will get back to you.',
       '',
       'Talk soon,',
       'The Escrow Africa Team',
