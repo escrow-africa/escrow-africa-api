@@ -10,6 +10,7 @@ import { JwtStrategy } from './strategy/jwt.strategy';
 import { UserModule } from '../user/user.module';
 import { OtpModule } from '../otp/otp.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { MailerModule } from '../common/mailer.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     OtpModule,
     PassportModule,
     PrismaModule,
+    MailerModule,
     ConfigModule.forRoot(),
     JwtModule.register({
       secret: process.env.JWT_SECRET!,

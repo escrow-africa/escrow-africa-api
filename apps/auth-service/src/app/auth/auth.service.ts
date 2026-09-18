@@ -16,6 +16,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { UserService } from '../user/user.service';
 import { OtpService } from '../otp/otp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { MailerService } from '../common/mailer.service';
 import { parseUserAgent } from './utils/parse-user-agent';
 
 @Injectable()
@@ -25,6 +26,7 @@ export class AuthService {
     private otpService: OtpService,
     private jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly mailer: MailerService,
   ) {}
 
   generateAccessToken(userId: string, email: string, sessionId?: string) {
@@ -135,6 +137,13 @@ export class AuthService {
         phone: dto.phone,
       },
     });
+
+    // Non-blocking: a mail-provider hiccup shouldn't fail the waitlist signup itself.
+    try {
+      await this.mailer.sendWaitlistEmail(dto.email, dto.firstName);
+    } catch {
+      // already logged inside MailerService
+    }
 
     return { message: 'Added to the waitlist successfully' };
   }
