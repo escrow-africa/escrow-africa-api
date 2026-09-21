@@ -218,6 +218,10 @@ export class AuthService {
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
     const user = await this.userService.findById(userId);
     if (!user) throw new NotFoundException('User not found');
 

@@ -15,8 +15,13 @@ export class SettingsController {
   constructor(private readonly settingsService: SettingsService) {}
 
   @Patch('me')
-  updateProfile(@Req() req: any, @Body() dto: UpdateProfileDto) {
-    return this.settingsService.updateProfile(req.user?.id, dto);
+  @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
+  updateProfile(
+    @Req() req: any,
+    @Body() dto: UpdateProfileDto,
+    @UploadedFile() avatar?: Express.Multer.File,
+  ) {
+    return this.settingsService.updateProfile(req.user?.id, dto, avatar);
   }
 
   @Post('me/avatar')
