@@ -16,10 +16,10 @@ export class MailerService {
     this.transporter = nodemailer.createTransport(transportOptions);
   }
 
-  async sendMail(to: string, subject: string, text: string) {
+  async sendMail(to: string, subject: string, text: string, html?: string) {
     const from = process.env.MAIL_FROM || 'no-reply@escrow.africa';
     try {
-      const res = await this.transporter.sendMail({ from, to, subject, text });
+      const res = await this.transporter.sendMail({ from, to, subject, text, ...(html ? { html } : {}) });
       this.logger.log(`Email sent to ${to} (${res && res.messageId || 'jsonTransport'})`);
       return res;
     } catch (err: any) {

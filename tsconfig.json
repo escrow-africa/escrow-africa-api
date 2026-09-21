@@ -22,6 +22,9 @@
       "path": "./apps/notification-service"
     },
     {
+      "path": "./apps/agent-service"
+    },
+    {
       "path": "./libs/postgres"
     },
     {

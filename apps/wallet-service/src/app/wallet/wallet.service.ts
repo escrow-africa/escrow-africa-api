@@ -25,8 +25,15 @@ export class WalletService {
 		const init = await this.monnify.initializeTransaction(userId, amount, customer);
 
 		const transactionReference = init.providerResponse.responseBody.transactionReference;
+		// paymentReference is the reference *we* generated and sent to Monnify (userId-uuid).
+		// The webhook echoes this back, not Monnify's own transactionReference, so this is what
+		// we must store as providerReference for processProviderPayment() to find this record.
+		const paymentReference = init.paymentReference;
 
 		// persist pending transaction (acts as payment record)
+		// transactionReference (Monnify's own id) is kept in metadata: authorizeCardOtp() only
+		// receives that value back from the frontend, not our paymentReference, so it needs a way
+		// to find this record too.
 		await this.prisma.transaction.create({
 			data: {
 				userId,
@@ -34,9 +41,9 @@ export class WalletService {
 				title: `Top-up initiated`,
 				amount: amount as any,
 				status: 'PENDING',
-				metadata: { method },
+				metadata: { method, transactionReference },
 				provider: 'MONNIFY',
-				providerReference: transactionReference,
+				providerReference: paymentReference,
 			},
 		});
 
@@ -48,9 +55,9 @@ export class WalletService {
 				if (!bankCode) throw new BadRequestException('bankCode is required for bank/ussd payments');
 				const resp = await this.monnify.initBankPayment(transactionReference, bankCode);
 				// attach provider data to transaction
-				const existingTxn = await this.prisma.transaction.findFirst({ where: { providerReference: transactionReference } });
+				const existingTxn = await this.prisma.transaction.findFirst({ where: { providerReference: paymentReference } });
 				if (existingTxn) {
-					await this.prisma.transaction.update({ where: { id: existingTxn.id }, data: { metadata: { ...resp.raw, method } } });
+					await this.prisma.transaction.update({ where: { id: existingTxn.id }, data: { metadata: { ...resp.raw, method, transactionReference } } });
 				}
 				return { transactionReference, ...resp };
 			}
@@ -59,9 +66,9 @@ export class WalletService {
 				const deviceInformation = opts.deviceInformation;
 				if (!card) throw new BadRequestException('card details required for card payments');
 				const resp = await this.monnify.chargeCard(transactionReference, card, deviceInformation);
-				const existingTxn2 = await this.prisma.transaction.findFirst({ where: { providerReference: transactionReference } });
+				const existingTxn2 = await this.prisma.transaction.findFirst({ where: { providerReference: paymentReference } });
 				if (existingTxn2) {
-					await this.prisma.transaction.update({ where: { id: existingTxn2.id }, data: { metadata: { ...resp.raw, method, tokenId: resp.tokenId } } });
+					await this.prisma.transaction.update({ where: { id: existingTxn2.id }, data: { metadata: { ...resp.raw, method, transactionReference, tokenId: resp.tokenId } } });
 				}
 				return { transactionReference, ...resp };
 			}
@@ -71,20 +78,23 @@ export class WalletService {
 	}
 
 	async authorizeCardOtp(transactionReference: string | undefined, tokenId: string, token: string) {
-		// transactionReference corresponds to our payment.providerReference
+		// transactionReference here is Monnify's own reference (what topUp() returned to the
+		// frontend), not our paymentReference/providerReference, so it's stashed in metadata.
 		if (!tokenId || !token) throw new BadRequestException('tokenId and token are required');
 
 		const txRef = transactionReference;
 		let txn = null;
 		if (txRef) {
-			txn = await this.prisma.transaction.findFirst({ where: { providerReference: txRef } });
+			txn = await this.prisma.transaction.findFirst({
+				where: { OR: [{ providerReference: txRef }, { metadata: { path: ['transactionReference'], equals: txRef } }] },
+			});
 			if (!txn) throw new NotFoundException('Transaction not found for transactionReference');
 		}
 
 		const resp = await this.monnify.authorizeCardOtp(tokenId, token, txRef);
 		// persist provider response
 		if (txRef && txn) {
-			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...(txn?.metadata || {}), ...(resp.raw || {}) } } });
+			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn?.metadata as any) || {}), ...(resp.raw || {}) } } });
 		}
 
 		// if provider indicates success, credit wallet
@@ -93,7 +103,10 @@ export class WalletService {
 			// find transaction to get userId and amount
 			const p = txRef ? txn : await this.prisma.transaction.findFirst({ where: { providerReference: providerRef } });
 			if (p) {
-				await this.processProviderPayment(providerRef, p.userId, Number(p.amount));
+				// Pass p.providerReference (our paymentReference), not providerRef (Monnify's own
+				// reference) - processProviderPayment() matches on providerReference and would
+				// otherwise create an orphaned duplicate instead of updating this record.
+				await this.processProviderPayment(p.providerReference || providerRef, p.userId, Number(p.amount));
 			}
 		}
 
@@ -167,18 +180,15 @@ export class WalletService {
 		return wallet.balance;
 	}
 
-	async getWalletDetails(userId: string) {
+	async getWalletDetails(userId: string, page = 1, limit = 20) {
 		const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 		if (!wallet) {
 			throw new NotFoundException('Wallet not found');
 		}
 
-		const transactions = await this.prisma.transaction.findMany({
-			where: { userId },
-			orderBy: { createdAt: 'desc' },
-		});
+		const { data, page: p, limit: l, total } = await this.transactionService.fetchTransactions(userId, page, limit);
 
-		return { wallet, payments: transactions };
+		return { wallet, payments: data, page: p, limit: l, total };
 	}
 
 	async credit(userId: string, amount: number, opts: { title?: string; type?: 'DEPOSIT' | 'WITHDRAWAL' | 'PAYOUT'; metadata?: any } = {}) {
@@ -269,6 +279,10 @@ export class WalletService {
 		return init;
 	}
 
+	async findByProviderReference(providerReference: string) {
+		return this.prisma.transaction.findFirst({ where: { providerReference } });
+	}
+
 	async processProviderPayment(providerReference: string, userId: string, amount: number, provider = 'MONNIFY') {
 		if (!providerReference) throw new BadRequestException('Missing provider reference');
 		// Check if payment already exists
@@ -277,6 +291,11 @@ export class WalletService {
 			this.logger.debug('Transaction already processed', providerReference);
 			return existing;
 		}
+
+		// Credit the wallet BEFORE marking the transaction COMPLETED. If credit() throws, the
+		// transaction stays PENDING (or absent) so a retried webhook can safely try again instead
+		// of being skipped as "already processed" while the wallet was never actually credited.
+		await this.credit(userId, amount, { title: `Deposit via ${provider}`, type: 'DEPOSIT', metadata: { providerReference } });
 
 		// create or update transaction record
 		const transaction = existing
@@ -293,12 +312,70 @@ export class WalletService {
 					},
 				});
 
-		// credit the wallet and create transaction record via credit() (credit() will also create an internal Transaction record)
-		await this.credit(userId, amount, { title: `Deposit via ${provider}`, type: 'DEPOSIT', metadata: { providerReference } });
 		return transaction;
 	}
 
 	async fetchTransactions(userId: string, page = 1, limit = 20, type?: string) {
 		return this.transactionService.fetchTransactions(userId, page, limit, type);
+	}
+
+	async listPayoutAccounts(userId: string) {
+		return this.prisma.payoutAccount.findMany({
+			where: { userId },
+			orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+		});
+	}
+
+	async addPayoutAccount(userId: string, data: { bankName: string; bankCode: string; accountNumber: string; accountName: string }) {
+		const existingCount = await this.prisma.payoutAccount.count({ where: { userId } });
+
+		return this.prisma.payoutAccount.create({
+			data: {
+				userId,
+				bankName: data.bankName,
+				bankCode: data.bankCode,
+				accountNumber: data.accountNumber,
+				accountName: data.accountName,
+				// first account a user adds becomes their default automatically
+				isDefault: existingCount === 0,
+			},
+		});
+	}
+
+	async deletePayoutAccount(userId: string, accountId: string) {
+		const account = await this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
+		if (!account || account.userId !== userId) {
+			throw new NotFoundException('Payout account not found');
+		}
+
+		await this.prisma.payoutAccount.delete({ where: { id: accountId } });
+
+		// promote the most recently added remaining account so a default always exists once
+		// at least one payout account is left
+		if (account.isDefault) {
+			const next = await this.prisma.payoutAccount.findFirst({
+				where: { userId },
+				orderBy: { createdAt: 'desc' },
+			});
+			if (next) {
+				await this.prisma.payoutAccount.update({ where: { id: next.id }, data: { isDefault: true } });
+			}
+		}
+
+		return { message: 'Payout account removed' };
+	}
+
+	async setDefaultPayoutAccount(userId: string, accountId: string) {
+		const account = await this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
+		if (!account || account.userId !== userId) {
+			throw new NotFoundException('Payout account not found');
+		}
+
+		await this.prisma.$transaction([
+			this.prisma.payoutAccount.updateMany({ where: { userId, isDefault: true }, data: { isDefault: false } }),
+			this.prisma.payoutAccount.update({ where: { id: accountId }, data: { isDefault: true } }),
+		]);
+
+		return this.prisma.payoutAccount.findUnique({ where: { id: accountId } });
 	}
 }

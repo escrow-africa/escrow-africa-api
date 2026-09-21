@@ -8,13 +8,144 @@ datasource db {
 
 model User {
   id             String   @id @default(uuid())
+  firstName      String
+  lastName       String
+  // Kept in sync automatically wherever firstName/lastName are written - other services
+  // (wallet-service's Monnify customer name, mailer templates, escrow buyer/seller display)
+  // still read this single combined field and weren't in scope to change.
   fullName       String
   email          String   @unique
   phone          String
   isEmailVerified Boolean  @default(false)
   password       String
+  referrerId     String?
+  bio            String?
+  avatarUrl      String?
+  companyName    String?
+  vatId          String?
+  billingAddress String?
+  isActive       Boolean  @default(true)
+  currency       String   @default("NGN")
+  language       String   @default("en-US")
+  timezone       String   @default("GMT+1")
+  subscriptionTier      SubscriptionTier @default(FREE)
+  subscriptionRenewsAt  DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  referrer                Agent?                   @relation("UserReferrer", fields: [referrerId], references: [id])
+  notificationPreference  NotificationPreference?
+  kycSubmissions          Kyc[]
+  sessions                Session[]
+  subscriptionEvents      SubscriptionEvent[]
+  supportTickets          SupportTicket[]
+}
+
+enum SubscriptionTier {
+  FREE
+  PRO
+  PREMIUM
+}
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String?
+  createdAt DateTime @default(now())
+}
+
+model SubscriptionEvent {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  tier      SubscriptionTier
+  amount    Decimal
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model SupportTicket {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id])
+  subject   String
+  message   String
+  status    SupportTicketStatus @default(OPEN)
+  createdAt DateTime            @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+enum SupportTicketStatus {
+  OPEN
+  CLOSED
+}
+
+model NotificationPreference {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  user                      User     @relation(fields: [userId], references: [id])
+  escrowContractReleases    Boolean  @default(true)
+  dispersalClearingAlerts   Boolean  @default(true)
+  disputeArbitrationWarning Boolean  @default(true)
+  tipsPromotionalAnalytics  Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+}
+
+model Kyc {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  documentType    String
+  documentUrl     String
+  status          KycStatus @default(PENDING)
+  rejectionReason String?
+  submittedAt     DateTime  @default(now())
+  reviewedAt      DateTime?
+
+  @@index([userId, submittedAt(sort: Desc)])
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Session {
+  id         String            @id @default(uuid())
+  userId     String
+  user       User              @relation(fields: [userId], references: [id])
+  deviceType SessionDeviceType @default(DESKTOP)
+  browser    String?
+  ip         String?
+  userAgent  String?
+  revokedAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@index([userId])
+}
+
+enum SessionDeviceType {
+  DESKTOP
+  MOBILE
+}
+
+model Agent {
+  id            String   @id @default(uuid())
+  fullName      String
+  email         String   @unique
+  phone         String
+  password      String
+  referralCode  String   @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  referredUsers User[]   @relation("UserReferrer")
 }
 
 model Otp {
@@ -30,18 +161,89 @@ model Otp {
 }
 
 model Dispute {
-  id           String        @id @default(uuid())
-  escrowId     String
-  raisedBy     String
-  reason       String
-  status       DisputeStatus @default(OPEN)
-  resolution   String?
-  resolvedBy   String?
-  resolvedAt   DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id                String          @id @default(cuid())
+  relatedContractId String          // FK to Escrow.id — the escrow this dispute is against
+  relatedContract   Escrow          @relation(fields: [relatedContractId], references: [id])
+  openedById        String
+  breachCategory    BreachCategory
+  disputedAmount    Decimal         // record-keeping/bot context only
+  claimDescription  String
+  status            DisputeStatus   @default(OPEN)
+  resolution        String?
+  resolvedBy        ResolvedBy?
+  confidence        Float?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  @@index([escrowId])
+  evidence          Evidence[]      // all evidence, marked with proofOfBreach flag
+  events            DisputeEvent[]
+
+  @@index([relatedContractId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+}
+
+model Evidence {
+  id                String   @id @default(cuid())
+  disputeId         String
+  dispute           Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  url               String
+  proofUrl          String?
+  mimeType          String   // e.g., "image/jpeg", "video/mp4"
+  fileName          String
+  fileHash          String   // sha256 hash for tampering detection
+  fileSize          Int?
+  uploadedById      String
+  proofOfBreach     Boolean  @default(false) // true if this is part of initial proof
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([disputeId])
+  @@index([fileHash])
+  @@index([createdAt(sort: Desc)])
+}
+
+model DisputeEvent {
+  id             String   @id @default(cuid())
+  disputeId      String
+  dispute        Dispute  @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  eventType      DisputeEventType
+  payload        Json?    // event-specific data
+  triggeredBy    String
+  createdAt      DateTime @default(now())
+
+  @@index([disputeId])
+  @@index([createdAt(sort: Desc)])
+}
+
+enum BreachCategory {
+  QUALITY_ISSUES
+  DELAYED_DELIVERY
+  COMMUNICATION_CESSATION
+  OUT_OF_SCOPE_DEMANDS
+  OTHERS
+}
+
+enum DisputeEventType {
+  STATUS_CHANGE
+  EVIDENCE_ADDED
+  EVIDENCE_REMOVED
+  RESOLUTION_PROPOSED
+  RESOLUTION_ACCEPTED
+  REVIEW_REQUESTED
+  SETTLEMENT_PROPOSED
+  SETTLEMENT_ACCEPTED
+  SETTLEMENT_DECLINED
+  MESSAGE
+  BOT_ANALYSIS_RESULT
+  BOT_MESSAGE
+}
+
+enum ResolvedBy {
+  ADMIN_DECISION
+  BOT_ADJUDICATION
+  MUTUAL_SETTLEMENT
+  SYSTEM_AUTO_RELEASE
 }
 
 enum DisputeStatus {
@@ -80,6 +282,45 @@ model Wallet {
   updatedAt DateTime @updatedAt
 }
 
+model PayoutAccount {
+  id            String   @id @default(uuid())
+  userId        String
+  bankName      String
+  bankCode      String
+  accountNumber String
+  accountName   String
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Notification {
+  id                String             @id @default(uuid())
+  userId            String
+  type              NotificationType
+  title             String
+  message           String
+  relatedEntityId   String?
+  link              String?
+  read              Boolean            @default(false)
+  readAt            DateTime?
+  createdAt         DateTime           @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, read])
+}
+
+enum NotificationType {
+  ESCROW_CREATED
+  ESCROW_APPROVED
+  ESCROW_RELEASED
+  ESCROW_RELEASE_FAILED
+  DISPUTE_OPENED
+  DISPUTE_RESOLVED
+}
+
 model Escrow {
   id                    String   @id @default(uuid())
   escrowCode            String   @unique
@@ -95,14 +336,22 @@ model Escrow {
   status                EscrowStatus @default(CREATED)
   proofUrl              String?
   deliveredAt           DateTime?
+  isLocked              Boolean   @default(false)
+  lockedReason          String?   // e.g. "DISPUTE_OPEN"
+  lockedAt              DateTime?
+  approvalToken         String?   @unique // single-use token for the buyer's email approval link; cleared once used
+  approvedAt            DateTime?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
+  disputes              Dispute[]
 
   @@index([buyerId])
   @@index([sellerId])
   @@index([status])
   @@index([buyerId, status])
   @@index([sellerId, status])
+  @@index([isLocked])
 }
 
 model Payment {
@@ -131,6 +380,7 @@ enum PaymentStatus {
 
 enum EscrowStatus {
   CREATED
+  PENDING_APPROVAL
   PENDING_PAYMENT
   FUNDED
   IN_PROGRESS

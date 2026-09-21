@@ -1,9 +1,19 @@
-import { IsEmail, IsString, IsArray, ArrayNotEmpty, IsNumber, IsPositive, IsIn, IsOptional, IsDateString } from 'class-validator';
+import { IsEmail, IsString, IsArray, ArrayNotEmpty, IsNumber, IsPositive, IsIn, IsOptional, IsDateString, ValidateIf, IsNotEmpty } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateEscrowDto {
+  @IsIn(['BUYER', 'SELLER'])
+  creatorRole!: 'BUYER' | 'SELLER';
+
+  @ValidateIf((o) => o.creatorRole === 'SELLER')
   @IsEmail()
-  buyerEmail!: string;
+  @IsNotEmpty()
+  buyerEmail?: string;
+
+  @ValidateIf((o) => o.creatorRole === 'BUYER')
+  @IsEmail()
+  @IsNotEmpty()
+  sellerEmail?: string;
 
   @IsArray()
   @ArrayNotEmpty()

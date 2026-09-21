@@ -31,16 +31,21 @@ export class MonnifyController {
       return { ok: false };
     }
 
-    // Our paymentReference was constructed as `${userId}-${uuid}` during initialization
-    const parts = String(parsed.providerReference).split('-');
-    const userId = parts.slice(0, parts.length - 1).join('-');
     const amount = Number(parsed.amount || 0);
     const status = parsed.status;
 
     if (status === 'PAID' || status === 'SUCCESS') {
       try {
+        // paymentReference was constructed as `${userId}-${uuid}` during initialization, but
+        // userId itself is a UUID (containing hyphens), so it cannot be reliably recovered by
+        // splitting on '-'. Look up the pending transaction we created at initialization instead.
+        const pending = await this.walletService.findByProviderReference(parsed.providerReference);
+        if (!pending) {
+          this.logger.warn('No pending transaction found for providerReference', parsed.providerReference);
+          return { ok: false };
+        }
         // walletService will record payment and credit once (idempotent behaviour)
-        await this.walletService.processProviderPayment(parsed.providerReference, userId, amount, 'MONNIFY');
+        await this.walletService.processProviderPayment(parsed.providerReference, pending.userId, amount, 'MONNIFY');
       } catch (e) {
         this.logger.error('Failed to process payment', e);
         return { ok: false };

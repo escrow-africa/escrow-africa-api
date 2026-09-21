@@ -56,9 +56,20 @@ export class AdminService {
     return this.prisma.admin.findUnique({ where: { email } });
   }
 
-  async findAll() {
-    return this.prisma.admin.findMany({
-      select: { id: true, email: true, fullName: true, role: true, createdAt: true },
-    });
+  async findAll(page = 1, limit = 20) {
+    const take = Math.min(limit, 100);
+    const skip = Math.max(0, (page - 1) * take);
+
+    const [data, total] = await Promise.all([
+      this.prisma.admin.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        select: { id: true, email: true, fullName: true, role: true, createdAt: true },
+      }),
+      this.prisma.admin.count(),
+    ]);
+
+    return { data, page, limit: take, total };
   }
 }
