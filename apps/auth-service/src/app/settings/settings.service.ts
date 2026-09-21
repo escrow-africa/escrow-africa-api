@@ -24,7 +24,7 @@ export class SettingsService {
     return user;
   }
 
-  async updateProfile(userId: string, dto: UpdateProfileDto) {
+  async updateProfile(userId: string, dto: UpdateProfileDto, avatarFile?: Express.Multer.File) {
     const user = await this.getUserOrThrow(userId);
 
     // firstName/lastName are the source of truth; fullName is kept in sync for the other
@@ -41,6 +41,9 @@ export class SettingsService {
       ? `${firstName ?? user.firstName} ${lastName ?? user.lastName}`.trim()
       : dto.fullName;
 
+    // A file takes priority over a plain avatarUrl string if both were somehow sent together.
+    const avatarUrl = avatarFile ? await this.uploadAvatarFile(userId, avatarFile) : dto.avatarUrl;
+
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -49,7 +52,7 @@ export class SettingsService {
         ...(fullName ? { fullName } : {}),
         ...(dto.email ? { email: dto.email } : {}),
         ...(dto.bio !== undefined ? { bio: dto.bio } : {}),
-        ...(dto.avatarUrl !== undefined ? { avatarUrl: dto.avatarUrl } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
       },
     });
 
@@ -57,10 +60,20 @@ export class SettingsService {
     return rest;
   }
 
+  // Kept as its own endpoint for clients that only want to change the avatar, alongside
+  // updateProfile() above which also accepts an avatar file as part of a full profile edit.
   async uploadAvatar(userId: string, file?: Express.Multer.File) {
     await this.getUserOrThrow(userId);
 
     if (!file) throw new BadRequestException('Avatar file is required');
+    const avatarUrl = await this.uploadAvatarFile(userId, file);
+
+    await this.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+
+    return { avatarUrl };
+  }
+
+  private async uploadAvatarFile(userId: string, file: Express.Multer.File): Promise<string> {
     if (!AVATAR_MIME_TYPES.includes(file.mimetype)) {
       throw new BadRequestException('Avatar must be a JPEG, PNG, or WEBP image');
     }
@@ -68,15 +81,11 @@ export class SettingsService {
       throw new BadRequestException('Avatar must be 2MB or smaller');
     }
 
-    const avatarUrl = await this.cloudinary.uploadBuffer(file.buffer, {
+    return this.cloudinary.uploadBuffer(file.buffer, {
       folder: 'avatars',
       resource_type: 'image',
       public_id: `user-${userId}-${Date.now()}`,
     });
-
-    await this.prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
-
-    return { avatarUrl };
   }
 
   async getBilling(userId: string) {
