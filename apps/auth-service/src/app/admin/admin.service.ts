@@ -1,7 +1,10 @@
-import { Injectable, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAdminDto } from './dto/create-admin.dto';
+import { KycReviewDecision, ReviewKycDto } from './dto/review-kyc.dto';
 import * as bcrypt from 'bcryptjs';
+
+const DEFAULT_VERIFIED_MONTHLY_DISPERSAL_LIMIT = 2_000_000;
 
 @Injectable()
 export class AdminService {
@@ -71,5 +74,57 @@ export class AdminService {
     ]);
 
     return { data, page, limit: take, total };
+  }
+
+  async listKycSubmissions(status: 'PENDING' | 'APPROVED' | 'REJECTED' = 'PENDING', page = 1, limit = 20) {
+    const take = Math.min(limit, 100);
+    const skip = Math.max(0, (page - 1) * take);
+
+    const [data, total] = await Promise.all([
+      this.prisma.kyc.findMany({
+        where: { status },
+        orderBy: { submittedAt: 'asc' },
+        skip,
+        take,
+        include: {
+          user: { select: { id: true, firstName: true, lastName: true, email: true, kycTier: true } },
+        },
+      }),
+      this.prisma.kyc.count({ where: { status } }),
+    ]);
+
+    return { data, page, limit: take, total };
+  }
+
+  async reviewKyc(kycId: string, dto: ReviewKycDto) {
+    const kyc = await this.prisma.kyc.findUnique({ where: { id: kycId } });
+    if (!kyc) throw new NotFoundException('KYC submission not found');
+    if (kyc.status !== 'PENDING') {
+      throw new ConflictException(`This submission has already been ${kyc.status.toLowerCase()}`);
+    }
+
+    if (dto.status === KycReviewDecision.APPROVED) {
+      const newLimit = dto.verifiedMonthlyDispersalLimit
+        ? Number(dto.verifiedMonthlyDispersalLimit)
+        : DEFAULT_VERIFIED_MONTHLY_DISPERSAL_LIMIT;
+
+      const [updatedKyc] = await this.prisma.$transaction([
+        this.prisma.kyc.update({
+          where: { id: kycId },
+          data: { status: 'APPROVED', reviewedAt: new Date(), rejectionReason: null },
+        }),
+        this.prisma.user.update({
+          where: { id: kyc.userId },
+          data: { kycTier: 'VERIFIED', monthlyDispersalLimit: newLimit },
+        }),
+      ]);
+
+      return updatedKyc;
+    }
+
+    return this.prisma.kyc.update({
+      where: { id: kycId },
+      data: { status: 'REJECTED', reviewedAt: new Date(), rejectionReason: dto.rejectionReason },
+    });
   }
 }

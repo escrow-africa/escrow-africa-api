@@ -38,6 +38,9 @@
     },
     {
       "path": "./libs/common"
+    },
+    {
+      "path": "./apps/advertisement-service"
     }
   ]
 }
