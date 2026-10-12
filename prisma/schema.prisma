@@ -30,6 +30,8 @@ model User {
   timezone       String   @default("GMT+1")
   subscriptionTier      SubscriptionTier @default(FREE)
   subscriptionRenewsAt  DateTime?
+  kycTier               KycTier  @default(UNVERIFIED)
+  monthlyDispersalLimit Decimal  @default(100000)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -114,6 +116,11 @@ enum KycStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum KycTier {
+  UNVERIFIED
+  VERIFIED
 }
 
 model Session {

@@ -29,6 +29,10 @@ async function bootstrap() {
   const server: any = app.getHttpAdapter().getInstance();
   const serviceBases = {
     auth: process.env.AUTH_API_URL,
+    // AdminController/AdminAuthController live inside auth-service (@Controller('admin')) under
+    // a different route prefix than AuthController — without this mount /api/admin/* 404s at the
+    // gateway the same way monnify/whatsapp did, making admin login and KYC review unreachable.
+    admin: process.env.AUTH_API_URL,
     disputes: process.env.DISPUTE_API_URL,
     escrow: process.env.ESCROW_API_URL,
     // Mount key must match notification-service's @Controller('notifications') (plural) —
