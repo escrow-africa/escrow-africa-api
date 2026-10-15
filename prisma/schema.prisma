@@ -24,6 +24,9 @@ model User {
   companyName    String?
   vatId          String?
   billingAddress String?
+  // Required by Flutterwave to create a permanent NGN virtual account at registration.
+  // Nullable because users created before this field existed won't have one yet.
+  bvn            String?
   isActive       Boolean  @default(true)
   currency       String   @default("NGN")
   language       String   @default("en-US")

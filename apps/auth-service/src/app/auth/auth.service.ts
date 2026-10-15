@@ -59,7 +59,7 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
-    const { firstName, lastName, email, phone, createPassword, confirmPassword, referralCode } = registerDto;
+    const { firstName, lastName, email, phone, createPassword, confirmPassword, referralCode, bvn } = registerDto;
     const fullName = `${firstName} ${lastName}`.trim();
 
     if (createPassword !== confirmPassword) {
@@ -95,6 +95,7 @@ export class AuthService {
       phone,
       password: createPassword,
       referrerId,
+      bvn,
     });
 
     // create and store OTP for email verification
@@ -111,7 +112,7 @@ export class AuthService {
       const normalized = String(walletServiceUrl).replace(/\/+$/, '');
       const walletUrl = `${normalized}/api/wallet/create`;
       // Non-blocking: a wallet-service hiccup shouldn't fail the whole registration.
-      await axios.post(walletUrl, { userId: user.id });
+      await axios.post(walletUrl, { userId: user.id, bvn });
       console.log('Wallet created for user', user.id);
     } catch (err) {
       console.warn('Wallet creation failed for user', user.id, (err as any)?.message || err);

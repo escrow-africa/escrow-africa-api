@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class RegisterDto {
   @IsNotEmpty()
@@ -24,4 +24,10 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   referralCode?: string;
+
+  // Required by the payment provider (Flutterwave) to create a permanent NGN virtual account
+  // for this user's wallet. Accepts either an 11-digit BVN or NIN.
+  @IsNotEmpty()
+  @Matches(/^\d{11}$/, { message: 'bvn must be an 11-digit BVN or NIN' })
+  bvn!: string;
 }
