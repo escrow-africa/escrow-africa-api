@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -147,6 +148,14 @@ export class AuthService {
     }
 
     return { message: 'Added to the waitlist successfully' };
+  }
+
+  async viewWaitlist(email: string) {
+    if (email !== 'idundunlouis@gmail.com') {
+      throw new ForbiddenException('Not authorized to view the waitlist');
+    }
+
+    return this.prisma.waitlistEntry.findMany({ orderBy: { createdAt: 'desc' } });
   }
 
   async login(data: any, deviceMeta: { userAgent?: string; ip?: string } = {}) {

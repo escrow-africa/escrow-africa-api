@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, UseGuards, Request, Get, Delete, Param } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards, Request, Get, Delete, Param, Query } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { WaitlistDto } from './dto/waitlist.dto';
@@ -21,6 +21,14 @@ export class AuthController {
   @HttpCode(200)
   joinWaitlist(@Body() waitlistDto: WaitlistDto) {
     return this.authService.joinWaitlist(waitlistDto);
+  }
+
+  // Deliberately simple, owner-only check (not real auth) - gated on a single hardcoded email
+  // per explicit request, for one person to view waitlist signups. Not meant to protect
+  // sensitive data at a real security boundary.
+  @Get('waitlist')
+  viewWaitlist(@Query('email') email: string) {
+    return this.authService.viewWaitlist(email);
   }
 
   @UseGuards(LocalAuthGuard)
