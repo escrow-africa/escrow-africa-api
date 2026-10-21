@@ -174,20 +174,38 @@ export class SettingsService {
   }
 
   async getKycStatus(userId: string) {
-    await this.getUserOrThrow(userId);
+    const user = await this.getUserOrThrow(userId);
     const latest = await this.prisma.kyc.findFirst({
       where: { userId },
       orderBy: { submittedAt: 'desc' },
     });
 
-    if (!latest) return { status: 'NOT_SUBMITTED' };
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const dispersedThisMonth = await this.prisma.transaction.aggregate({
+      _sum: { amount: true },
+      where: {
+        userId,
+        type: { in: ['WITHDRAWAL', 'PAYOUT'] },
+        status: 'COMPLETED',
+        createdAt: { gte: startOfMonth },
+      },
+    });
+
+    // Frontend badge only special-cases "verified"/"pending"; anything else renders "Unverified".
+    const statusMap: Record<string, string> = { APPROVED: 'verified', PENDING: 'pending', REJECTED: 'rejected' };
 
     return {
-      status: latest.status,
-      documentType: latest.documentType,
-      submittedAt: latest.submittedAt,
-      reviewedAt: latest.reviewedAt,
-      rejectionReason: latest.rejectionReason,
+      status: latest ? statusMap[latest.status] || 'unverified' : 'not_submitted',
+      tier: user.kycTier === 'VERIFIED' ? 'Verified' : 'Unverified',
+      documentType: latest?.documentType,
+      submittedAt: latest?.submittedAt,
+      reviewedAt: latest?.reviewedAt,
+      rejectionReason: latest?.rejectionReason,
+      dispersalLimitUsed: Number(dispersedThisMonth._sum.amount || 0),
+      dispersalLimitTotal: Number(user.monthlyDispersalLimit),
     };
   }
 }

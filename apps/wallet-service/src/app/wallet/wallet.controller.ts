@@ -14,9 +14,9 @@ export class WalletController {
 
   @Post('create')
   @Public()
-  async create(@Body() body: { userId: string; skipProvider?: boolean }) {
-    const { userId, skipProvider } = body as any;
-    return this.walletService.createWalletForUser(userId, !!skipProvider);
+  async create(@Body() body: { userId: string; skipProvider?: boolean; bvn?: string }) {
+    const { userId, skipProvider, bvn } = body as any;
+    return this.walletService.createWalletForUser(userId, !!skipProvider, bvn);
   }
 
   @Get('banks')

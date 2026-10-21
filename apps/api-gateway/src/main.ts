@@ -29,6 +29,10 @@ async function bootstrap() {
   const server: any = app.getHttpAdapter().getInstance();
   const serviceBases = {
     auth: process.env.AUTH_API_URL,
+    // AdminController/AdminAuthController live inside auth-service (@Controller('admin')) under
+    // a different route prefix than AuthController - without this mount /api/admin/* 404s at the
+    // gateway the same way monnify/whatsapp did, making admin login and KYC review unreachable.
+    admin: process.env.AUTH_API_URL,
     disputes: process.env.DISPUTE_API_URL,
     escrow: process.env.ESCROW_API_URL,
     // Mount key must match notification-service's @Controller('notifications') (plural) —
@@ -40,6 +44,10 @@ async function bootstrap() {
     // route prefix than WalletController - Monnify's own servers call this webhook directly, so
     // without this mount it 404s at the gateway the same way whatsapp/notifications did.
     monnify: process.env.WALLET_API_URL,
+    // FlutterwaveController (@Controller('flutterwave')) is the active payment provider's webhook
+    // route, same pattern as monnify above - kept as its own mount since Flutterwave's servers
+    // call this path directly, not through /api/wallet.
+    flutterwave: process.env.WALLET_API_URL,
     agent: process.env.AGENT_API_URL,
     // WhatsappController lives inside dispute-service (@Controller('whatsapp')) alongside
     // DisputeController, but under a different route prefix — without this mount, inbound

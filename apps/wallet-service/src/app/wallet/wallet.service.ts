@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { MonnifyService } from '../monnify/monnify.service';
+import { FlutterwaveService } from '../flutterwave/flutterwave.service';
 import { TransactionService } from '../transaction/transaction.service';
 
 @Injectable()
@@ -8,7 +8,7 @@ export class WalletService {
 	private readonly logger = new Logger(WalletService.name);
 	constructor(
 		private readonly prisma: PrismaService,
-		private readonly monnify: MonnifyService,
+		private readonly provider: FlutterwaveService,
 		private readonly transactionService: TransactionService,
 	) {}
 
@@ -22,16 +22,16 @@ export class WalletService {
     const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 
 		// initialize transaction with provider
-		const init = await this.monnify.initializeTransaction(userId, amount, customer);
+		const init = await this.provider.initializeTransaction(userId, amount, customer);
 
 		const transactionReference = init.providerResponse.responseBody.transactionReference;
-		// paymentReference is the reference *we* generated and sent to Monnify (userId-uuid).
-		// The webhook echoes this back, not Monnify's own transactionReference, so this is what
+		// paymentReference is the reference *we* generated and sent to the provider (userId-uuid).
+		// The webhook echoes this back, not the provider's own transactionReference, so this is what
 		// we must store as providerReference for processProviderPayment() to find this record.
 		const paymentReference = init.paymentReference;
 
 		// persist pending transaction (acts as payment record)
-		// transactionReference (Monnify's own id) is kept in metadata: authorizeCardOtp() only
+		// transactionReference (the provider's own id) is kept in metadata: authorizeCardOtp() only
 		// receives that value back from the frontend, not our paymentReference, so it needs a way
 		// to find this record too.
 		await this.prisma.transaction.create({
@@ -42,7 +42,7 @@ export class WalletService {
 				amount: amount as any,
 				status: 'PENDING',
 				metadata: { method, transactionReference },
-				provider: 'MONNIFY',
+				provider: 'FLUTTERWAVE',
 				providerReference: paymentReference,
 			},
 		});
@@ -52,8 +52,7 @@ export class WalletService {
 			case 'bank':
 			case 'ussd': {
 				const bankCode = wallet?.bankCode;
-				if (!bankCode) throw new BadRequestException('bankCode is required for bank/ussd payments');
-				const resp = await this.monnify.initBankPayment(transactionReference, bankCode);
+				const resp = await this.provider.initBankPayment(transactionReference, bankCode, amount, customer);
 				// attach provider data to transaction
 				const existingTxn = await this.prisma.transaction.findFirst({ where: { providerReference: paymentReference } });
 				if (existingTxn) {
@@ -65,7 +64,7 @@ export class WalletService {
 				const card = opts.card;
 				const deviceInformation = opts.deviceInformation;
 				if (!card) throw new BadRequestException('card details required for card payments');
-				const resp = await this.monnify.chargeCard(transactionReference, card, deviceInformation);
+				const resp = await this.provider.chargeCard(transactionReference, card, deviceInformation, amount, customer);
 				const existingTxn2 = await this.prisma.transaction.findFirst({ where: { providerReference: paymentReference } });
 				if (existingTxn2) {
 					await this.prisma.transaction.update({ where: { id: existingTxn2.id }, data: { metadata: { ...resp.raw, method, transactionReference, tokenId: resp.tokenId } } });
@@ -78,7 +77,7 @@ export class WalletService {
 	}
 
 	async authorizeCardOtp(transactionReference: string | undefined, tokenId: string, token: string) {
-		// transactionReference here is Monnify's own reference (what topUp() returned to the
+		// transactionReference here is the provider's own reference (what topUp() returned to the
 		// frontend), not our paymentReference/providerReference, so it's stashed in metadata.
 		if (!tokenId || !token) throw new BadRequestException('tokenId and token are required');
 
@@ -91,7 +90,7 @@ export class WalletService {
 			if (!txn) throw new NotFoundException('Transaction not found for transactionReference');
 		}
 
-		const resp = await this.monnify.authorizeCardOtp(tokenId, token, txRef);
+		const resp = await this.provider.authorizeCardOtp(tokenId, token, txRef);
 		// persist provider response
 		if (txRef && txn) {
 			await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn?.metadata as any) || {}), ...(resp.raw || {}) } } });
@@ -114,10 +113,10 @@ export class WalletService {
 	}
 
 	async getBanks() {
-		return this.monnify.getBanks();
+		return this.provider.getBanks();
 	}
 
-		async createWalletForUser(userId: string, skipProvider = false) {
+		async createWalletForUser(userId: string, skipProvider = false, bvn?: string) {
 			const existing = await this.prisma.wallet.findUnique({ where: { userId } });
 			if (existing) return existing;
 
@@ -127,8 +126,8 @@ export class WalletService {
 				try {
 					// fetch user info to enrich provider payload
 					const user = await this.prisma.user.findUnique({ where: { id: userId } });
-					const customer = user ? { name: user.fullName, email: user.email } : undefined;
-					const ra = await this.monnify.createReservedAccount(userId, customer);
+					const customer = user ? { name: user.fullName, email: user.email, phone: user.phone, bvn: bvn || user.bvn || undefined } : undefined;
+					const ra = await this.provider.createVirtualAccount(userId, customer);
 					if (ra && ra.accountNumber) {
 						await this.prisma.wallet.update({
 							where: { id: wallet.id },
@@ -142,20 +141,20 @@ export class WalletService {
 						});
 					}
 				} catch (e) {
-					this.logger.warn('Failed to create Monnify reserved account for user (skipProvider mode)', userId, e);
+					this.logger.warn('Failed to create Flutterwave virtual account for user (skipProvider mode)', userId, e);
 				}
 				return wallet;
 			}
 
-			// Strict path: require provider reserved account first, then persist local wallet with provider details
-			this.logger.debug('Creating provider reserved account before local wallet for', userId);
-			// fetch user info and include customer name/email in provider request
+			// Strict path: require provider virtual account first, then persist local wallet with provider details
+			this.logger.debug('Creating provider virtual account before local wallet for', userId);
+			// fetch user info and include customer name/email/bvn in provider request
 			const user = await this.prisma.user.findUnique({ where: { id: userId } });
-			const customer = user ? { name: user.fullName, email: user.email } : undefined;
-			const ra = await this.monnify.createReservedAccount(userId, customer);
+			const customer = user ? { name: user.fullName, email: user.email, phone: user.phone, bvn: bvn || user.bvn || undefined } : undefined;
+			const ra = await this.provider.createVirtualAccount(userId, customer);
 			if (!ra || !ra.accountNumber) {
-				this.logger.error('Monnify did not return accountNumber', ra);
-				throw new Error('Failed to create provider reserved account');
+				this.logger.error('Flutterwave did not return accountNumber', ra);
+				throw new Error('Failed to create provider virtual account');
 			}
 
 			const wallet = await this.prisma.wallet.create({
@@ -257,11 +256,11 @@ export class WalletService {
 	}
 
 	async deposit(userId: string, amount: number) {
-		// keep method name for compatibility but delegate to Monnify
+		// keep method name for compatibility but delegate to the payment provider
 		// fetch user info to provide accurate customer name/email to provider
 		const user = await this.prisma.user.findUnique({ where: { id: userId } });
 		const customer = user ? { name: user.fullName, email: user.email } : { name: userId, email: `${userId}@example.com` };
-		const init = await this.monnify.initializeTransaction(userId, amount, customer);
+		const init = await this.provider.initializeTransaction(userId, amount, customer);
 
 		// record a pending transaction in DB to allow idempotent webhook handling
 		await this.prisma.transaction.create({
@@ -271,7 +270,7 @@ export class WalletService {
 				title: `Deposit initiated`,
 				amount: amount as any,
 				status: 'PENDING',
-				provider: 'MONNIFY',
+				provider: 'FLUTTERWAVE',
 				providerReference: init.paymentReference,
 			},
 		});
@@ -283,7 +282,7 @@ export class WalletService {
 		return this.prisma.transaction.findFirst({ where: { providerReference } });
 	}
 
-	async processProviderPayment(providerReference: string, userId: string, amount: number, provider = 'MONNIFY') {
+	async processProviderPayment(providerReference: string, userId: string, amount: number, provider = 'FLUTTERWAVE') {
 		if (!providerReference) throw new BadRequestException('Missing provider reference');
 		// Check if payment already exists
 		const existing = await this.prisma.transaction.findFirst({ where: { providerReference } });

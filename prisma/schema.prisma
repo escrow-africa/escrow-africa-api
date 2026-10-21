@@ -24,12 +24,17 @@ model User {
   companyName    String?
   vatId          String?
   billingAddress String?
+  // Required by Flutterwave to create a permanent NGN virtual account at registration.
+  // Nullable because users created before this field existed won't have one yet.
+  bvn            String?
   isActive       Boolean  @default(true)
   currency       String   @default("NGN")
   language       String   @default("en-US")
   timezone       String   @default("GMT+1")
   subscriptionTier      SubscriptionTier @default(FREE)
   subscriptionRenewsAt  DateTime?
+  kycTier               KycTier  @default(UNVERIFIED)
+  monthlyDispersalLimit Decimal  @default(100000)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -114,6 +119,11 @@ enum KycStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum KycTier {
+  UNVERIFIED
+  VERIFIED
 }
 
 model Session {
