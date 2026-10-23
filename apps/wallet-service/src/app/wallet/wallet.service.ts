@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException, Logger } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { FlutterwaveService } from '../flutterwave/flutterwave.service';
 import { TransactionService } from '../transaction/transaction.service';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class WalletService {
@@ -253,6 +254,88 @@ export class WalletService {
 		}
 
 		return updated;
+	}
+
+	// Real disbursement to an external bank account - debits the wallet immediately (so the
+	// balance reflects the withdrawal right away) and reverses that debit if the transfer can't
+	// even be initiated. Final confirmation (SUCCESSFUL/FAILED) arrives later via webhook and is
+	// handled by processWithdrawalUpdate() below, which reverses the debit again on a late FAILED.
+	async withdraw(userId: string, amount: number, payoutAccountId: string) {
+		if (amount <= 0) throw new BadRequestException('Amount must be positive');
+
+		const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+		if (!wallet) throw new NotFoundException('Wallet not found');
+		if (Number(wallet.balance) < amount) throw new BadRequestException('Insufficient funds');
+
+		const payoutAccount = await this.prisma.payoutAccount.findUnique({ where: { id: payoutAccountId } });
+		if (!payoutAccount || payoutAccount.userId !== userId) {
+			throw new NotFoundException('Payout account not found');
+		}
+
+		// Flutterwave caps reference at 64 chars - userId plus a full uuid would exceed that, so
+		// the reference is opaque (just unique); the Transaction row already carries userId.
+		const reference = `wd-${uuidv4()}`;
+
+		const [, transaction] = await this.prisma.$transaction([
+			this.prisma.wallet.update({ where: { id: wallet.id }, data: { balance: { decrement: amount } as any } }),
+			this.prisma.transaction.create({
+				data: {
+					userId,
+					type: 'WITHDRAWAL',
+					title: `Withdrawal to ${payoutAccount.bankName}`,
+					amount: amount as any,
+					status: 'PENDING',
+					provider: 'FLUTTERWAVE',
+					providerReference: reference,
+					metadata: {
+						payoutAccountId,
+						bankName: payoutAccount.bankName,
+						accountNumber: payoutAccount.accountNumber,
+						accountName: payoutAccount.accountName,
+					},
+				},
+			}),
+		]);
+
+		try {
+			const resp = await this.provider.initiateTransfer(reference, amount, {
+				bankCode: payoutAccount.bankCode,
+				accountNumber: payoutAccount.accountNumber,
+				accountName: payoutAccount.accountName,
+			});
+
+			await this.prisma.transaction.update({
+				where: { id: transaction.id },
+				data: { metadata: { ...(transaction.metadata as any), transferId: resp.transferId, providerStatus: resp.status } },
+			});
+
+			return { reference, status: 'PENDING', message: 'Withdrawal initiated', transferId: resp.transferId };
+		} catch (e) {
+			// The transfer call itself failed (not just "pending") - reverse the debit immediately
+			// rather than leaving the user's money stuck waiting for a webhook that'll never arrive.
+			await this.prisma.$transaction([
+				this.prisma.wallet.update({ where: { id: wallet.id }, data: { balance: { increment: amount } as any } }),
+				this.prisma.transaction.update({ where: { id: transaction.id }, data: { status: 'FAILED' } }),
+			]);
+			this.logger.error('Withdrawal transfer initiation failed, reversed debit', userId, e);
+			throw new BadRequestException('Unable to process withdrawal right now. Your balance has not been affected.');
+		}
+	}
+
+	// Called from the Flutterwave webhook once a transfer's final status is known.
+	async processWithdrawalUpdate(providerReference: string, status: string) {
+		const txn = await this.prisma.transaction.findFirst({ where: { providerReference } });
+		if (!txn || txn.status !== 'PENDING') return; // already handled, or not ours
+
+		if (status === 'SUCCESSFUL') {
+			await this.prisma.transaction.update({ where: { id: txn.id }, data: { status: 'COMPLETED' } });
+		} else if (status === 'FAILED') {
+			// Reverse the debit taken at initiation so the user's money actually comes back.
+			await this.prisma.$transaction([
+				this.prisma.wallet.update({ where: { userId: txn.userId }, data: { balance: { increment: Number(txn.amount) } as any } }),
+				this.prisma.transaction.update({ where: { id: txn.id }, data: { status: 'FAILED' } }),
+			]);
+		}
 	}
 
 	async deposit(userId: string, amount: number) {

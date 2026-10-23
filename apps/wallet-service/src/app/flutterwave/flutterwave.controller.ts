@@ -26,21 +26,28 @@ export class FlutterwaveController {
       return { ok: false };
     }
 
-    const amount = Number(parsed.amount || 0);
-    const status = parsed.status;
+    const pending = await this.walletService.findByProviderReference(parsed.providerReference);
+    if (!pending) {
+      this.logger.warn('No pending transaction found for providerReference', parsed.providerReference);
+      return { ok: false };
+    }
 
-    if (status === 'SUCCESSFUL' || status === 'SUCCESS') {
-      try {
-        const pending = await this.walletService.findByProviderReference(parsed.providerReference);
-        if (!pending) {
-          this.logger.warn('No pending transaction found for providerReference', parsed.providerReference);
-          return { ok: false };
-        }
+    const amount = Number(parsed.amount || 0);
+    const status = String(parsed.status || '').toUpperCase();
+
+    try {
+      // Branching on our own transaction's type (rather than trying to parse Flutterwave's
+      // event name, which has already been observed to vary - see parseWebhook's comment) is
+      // the robust way to tell a collection (deposit) webhook apart from a transfer (withdrawal)
+      // one, since both land on this same endpoint.
+      if (pending.type === 'WITHDRAWAL') {
+        await this.walletService.processWithdrawalUpdate(parsed.providerReference, status);
+      } else if (status === 'SUCCESSFUL' || status === 'SUCCESS') {
         await this.walletService.processProviderPayment(parsed.providerReference, pending.userId, amount, 'FLUTTERWAVE');
-      } catch (e) {
-        this.logger.error('Failed to process payment', e);
-        return { ok: false };
       }
+    } catch (e) {
+      this.logger.error('Failed to process webhook', e);
+      return { ok: false };
     }
     return { ok: true };
   }
