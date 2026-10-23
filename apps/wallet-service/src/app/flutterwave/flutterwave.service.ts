@@ -239,13 +239,51 @@ export class FlutterwaveService {
     };
   }
 
+  // Disburses funds to an external bank account (NGN only). Status comes back NEW/PENDING
+  // immediately - final SUCCESSFUL/FAILED confirmation arrives later via webhook.
+  async initiateTransfer(
+    reference: string,
+    amount: number,
+    destination: { bankCode: string; accountNumber: string; accountName?: string },
+  ) {
+    const url = `${this.getBaseUrl()}/transfers`;
+    const payload = {
+      account_bank: destination.bankCode,
+      account_number: destination.accountNumber,
+      amount,
+      currency: 'NGN',
+      narration: 'Escrow Africa wallet withdrawal',
+      reference,
+    };
+
+    this.logger.debug('Initiating Flutterwave transfer', { url, reference, amount });
+    const resp = await this.withRetries(async () => {
+      try {
+        return await axios.post(url, payload, { headers: this.headers() });
+      } catch (e: any) {
+        this.logger.error('Flutterwave initiateTransfer error', e?.response?.status, e?.response?.data || e?.message);
+        throw e;
+      }
+    });
+
+    const body = resp.data?.data || resp.data;
+    return {
+      providerResponse: resp.data,
+      transferId: body?.id,
+      status: body?.status,
+      raw: body,
+    };
+  }
+
   async parseWebhook(payload: any) {
-    // Confirmed against a real Flutterwave sandbox webhook delivery: this particular event
+    // Confirmed against a real Flutterwave sandbox webhook delivery: a charge/collection event
     // arrives with camelCase fields (txRef/flwRef) at the top level, not nested under `data`
     // with snake_case names as Flutterwave's own docs example shows for charge.completed.
-    // Checking both shapes/casings makes this resilient to whichever one actually arrives.
+    // Transfer events (payouts/withdrawals) use a different field entirely - `reference`, which
+    // is the exact string we generated and sent when creating the transfer. Checking all of
+    // these makes this resilient to whichever shape actually arrives for either event type.
     const data = payload?.data || payload;
-    const providerReference = data?.tx_ref || data?.txRef || data?.flw_ref || data?.flwRef;
+    const providerReference = data?.reference || data?.tx_ref || data?.txRef || data?.flw_ref || data?.flwRef;
     const amount = data?.amount;
     const status = String(data?.status || '').toUpperCase();
     return { providerReference, amount, status, raw: payload };

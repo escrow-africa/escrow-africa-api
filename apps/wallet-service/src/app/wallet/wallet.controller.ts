@@ -4,6 +4,7 @@ import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
 import { CardOtpDto } from './dto/card-otp.dto';
 import { CreatePayoutAccountDto } from './dto/payout-account.dto';
+import { WithdrawDto } from './dto/withdraw.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../../decorators/public.decorator';
 
@@ -66,6 +67,12 @@ export class WalletController {
   async cardOtp(@Body() dto: CardOtpDto) {
     const { transactionReference, tokenId, token } = dto as any;
     return this.walletService.authorizeCardOtp(transactionReference, tokenId, token);
+  }
+
+  @Post('withdraw')
+  async withdraw(@Req() req: Request, @Body() dto: WithdrawDto) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.withdraw(userId, dto.amount, dto.payoutAccountId);
   }
 
   @Get('transaction')
