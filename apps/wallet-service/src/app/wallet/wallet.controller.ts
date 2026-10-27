@@ -3,6 +3,7 @@ import { type Request } from 'express';
 import { WalletService } from './wallet.service';
 import { TopUpDto } from './dto/topup.dto';
 import { CardOtpDto } from './dto/card-otp.dto';
+import { CardPinDto } from './dto/card-pin.dto';
 import { CreatePayoutAccountDto } from './dto/payout-account.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -67,6 +68,12 @@ export class WalletController {
   async cardOtp(@Body() dto: CardOtpDto) {
     const { transactionReference, tokenId, token } = dto as any;
     return this.walletService.authorizeCardOtp(transactionReference, tokenId, token);
+  }
+
+  @Post('card-pin')
+  async cardPin(@Req() req: Request, @Body() dto: CardPinDto) {
+    const userId = (req as any).user?.sub;
+    return this.walletService.retryCardWithPin(userId, dto.transactionReference, dto.pin, dto.card);
   }
 
   @Post('withdraw')
