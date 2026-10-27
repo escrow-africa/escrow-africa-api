@@ -173,17 +173,23 @@ export class WalletService {
 	}
 
 	async getBalance(userId: string) {
-		const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+		let wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 		if (!wallet) {
-			throw new NotFoundException('Wallet not found');
+			this.logger.warn('Wallet missing on balance fetch - creating on demand', userId);
+			wallet = await this.createWalletForUser(userId, true);
 		}
 		return wallet.balance;
 	}
 
 	async getWalletDetails(userId: string, page = 1, limit = 20) {
-		const wallet = await this.prisma.wallet.findUnique({ where: { userId } });
+		let wallet = await this.prisma.wallet.findUnique({ where: { userId } });
 		if (!wallet) {
-			throw new NotFoundException('Wallet not found');
+			// Self-healing: registration creates the wallet via a non-blocking, best-effort call -
+			// if that failed (provider hiccup, etc.) the user would otherwise be stuck with a
+			// permanent 404 here. Retrying on-demand, in skipProvider mode, means they always get
+			// at least a local wallet immediately, with the provider account attached if it succeeds.
+			this.logger.warn('Wallet missing on details fetch - creating on demand', userId);
+			wallet = await this.createWalletForUser(userId, true);
 		}
 
 		const { data, page: p, limit: l, total } = await this.transactionService.fetchTransactions(userId, page, limit);
