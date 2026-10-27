@@ -113,6 +113,30 @@ export class WalletService {
 		return { providerRef, status: resp.status, raw: resp.raw };
 	}
 
+	// Resubmits a card charge with the PIN nested in the authorization object, for cards whose
+	// evaluated auth mode came back "pin" rather than "otp" or "redirect". Flutterwave ties this
+	// to the same tx_ref as the original attempt.
+	async retryCardWithPin(userId: string, transactionReference: string, pin: string, card: { number: string; expiryMonth: string; expiryYear: string; cvv?: string }) {
+		const txn = await this.prisma.transaction.findFirst({
+			where: { OR: [{ providerReference: transactionReference }, { metadata: { path: ['transactionReference'], equals: transactionReference } }] },
+		});
+		if (!txn || txn.userId !== userId) throw new NotFoundException('Transaction not found for transactionReference');
+
+		const user = await this.prisma.user.findUnique({ where: { id: userId } });
+		const customer = user ? { name: user.fullName, email: user.email } : undefined;
+		const amount = Number(txn.amount);
+
+		const resp = await this.provider.chargeCard(transactionReference, { ...card, pin }, undefined, amount, customer);
+
+		await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn.metadata as any) || {}), ...(resp.raw || {}) } } });
+
+		if (resp.status && String(resp.status).toUpperCase().includes('SUCCESS')) {
+			await this.processProviderPayment(txn.providerReference!, userId, amount);
+		}
+
+		return { transactionReference, ...resp };
+	}
+
 	async getBanks() {
 		return this.provider.getBanks();
 	}

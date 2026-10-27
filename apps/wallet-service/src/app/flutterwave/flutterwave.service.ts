@@ -163,10 +163,19 @@ export class FlutterwaveService {
     });
 
     const body = resp.data?.data || resp.data;
+    // Flutterwave evaluates the card and tells us which of three authorization models it needs
+    // (we only find out after this call, regardless of what we sent): "pin" (resubmit with the
+    // nested authorization object - see retryWithPin flow), "otp" (validate separately via
+    // validate-charge, below), or "redirect" (3D-Secure/VBV - the cardholder must complete a
+    // hosted verification page; there is no code to collect, final status arrives via webhook).
+    const authMode = body?.meta?.authorization?.mode;
     return {
       providerResponse: resp.data,
       providerReference: body?.flw_ref || body?.tx_ref || transactionReference,
-      requiresOtp: body?.status === 'pending' || !!body?.meta?.authorization,
+      status: body?.status,
+      authorizationMode: authMode as 'pin' | 'otp' | 'redirect' | undefined,
+      redirectUrl: authMode === 'redirect' ? body?.meta?.authorization?.redirect : undefined,
+      requiresOtp: authMode === 'otp',
       // flw_ref doubles as the reference the OTP validation step needs, kept under the same
       // `tokenId` field name Monnify used so wallet.service.ts's call sites don't change.
       tokenId: body?.flw_ref,
