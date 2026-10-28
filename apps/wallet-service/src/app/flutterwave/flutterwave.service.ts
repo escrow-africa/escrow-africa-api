@@ -168,13 +168,19 @@ export class FlutterwaveService {
     // nested authorization object - see retryWithPin flow), "otp" (validate separately via
     // validate-charge, below), or "redirect" (3D-Secure/VBV - the cardholder must complete a
     // hosted verification page; there is no code to collect, final status arrives via webhook).
-    const authMode = body?.meta?.authorization?.mode;
+    // `meta` is NOT always nested under `data`: the initial charge response has it alongside
+    // `status`/`message` at the top level (no `data` key at all), but once a PIN is submitted and
+    // the charge escalates to a further step (e.g. OTP), Flutterwave's response grows a sibling
+    // `data` object and `meta` stays at the top level, outside it - reading only `body?.meta` would
+    // silently lose authorizationMode on that second call and let a still-pending charge look done.
+    const meta = resp.data?.meta || body?.meta;
+    const authMode = meta?.authorization?.mode;
     return {
       providerResponse: resp.data,
       providerReference: body?.flw_ref || body?.tx_ref || transactionReference,
       status: body?.status,
       authorizationMode: authMode as 'pin' | 'otp' | 'redirect' | undefined,
-      redirectUrl: authMode === 'redirect' ? body?.meta?.authorization?.redirect : undefined,
+      redirectUrl: authMode === 'redirect' ? meta?.authorization?.redirect : undefined,
       requiresOtp: authMode === 'otp',
       // flw_ref doubles as the reference the OTP validation step needs, kept under the same
       // `tokenId` field name Monnify used so wallet.service.ts's call sites don't change.

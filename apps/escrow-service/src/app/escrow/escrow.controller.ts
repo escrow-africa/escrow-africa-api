@@ -155,4 +155,16 @@ export class EscrowController {
   async handleDisputeResolved(@Payload() data: any) {
     return this.escrowService.handleDisputeResolved(data.escrowId, data.disputeId, data.verdict);
   }
+
+  // Synchronous counterpart to the DISPUTE_RESOLVED Kafka event above, called directly by
+  // dispute-service's admin resolve() path. The Kafka event is fire-and-forget with no delivery
+  // guarantee - if the broker is unreachable at that moment, an admin could resolve a dispute and
+  // see it marked RESOLVED while the escrow stays locked forever, with no other way to release or
+  // refund it. This gives dispute-service a request/response path it can await and surface a real
+  // error from, instead of relying solely on the event eventually arriving. handleDisputeResolved
+  // is already idempotent, so firing it twice (this call, then later the Kafka event too) is safe.
+  @Post(':id/dispute-resolved')
+  async disputeResolved(@Param('id') id: string, @Body() body: { disputeId: string; verdict?: 'RELEASE_TO_SELLER' | 'REFUND_BUYER' }) {
+    return this.escrowService.handleDisputeResolved(id, body.disputeId, body.verdict);
+  }
 }

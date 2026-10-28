@@ -5,6 +5,7 @@ import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { ClientKafka } from '@nestjs/microservices';
 import { KafkaEvents } from '@org/kafka';
 import * as crypto from 'crypto';
+import axios from 'axios';
 import { Decimal } from '@prisma/client/runtime/client';
 import { CloudinaryService } from './cloudinary.service';
 
@@ -230,7 +231,7 @@ export class DisputeService {
     return updated;
   }
 
-  async resolve(id: string, resolveDto: ResolveDisputeDto, adminId: string) {
+  async resolve(id: string, resolveDto: ResolveDisputeDto, adminId: string, authHeader?: string) {
     const existing = await this.prisma.dispute.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Dispute not found');
 
@@ -248,6 +249,29 @@ export class DisputeService {
       },
     });
 
+    // Primary unlock path: a synchronous call escrow-service actually responds to, so a failure
+    // here is visible immediately instead of the escrow silently staying locked forever (see
+    // escrow.service.ts's EscrowController.disputeResolved for why the Kafka event alone wasn't
+    // enough). The Kafka emit below stays as a secondary attempt; handleDisputeResolved on the
+    // receiving end is idempotent, so it's safe for both to land.
+    let escrowUnlockWarning: string | undefined;
+    const escrowBaseUrl = process.env.ESCROW_API_URL;
+    if (escrowBaseUrl) {
+      try {
+        const normalized = String(escrowBaseUrl).replace(/\/+$/, '');
+        await axios.post(
+          `${normalized}/api/escrow/${updated.relatedContractId}/dispute-resolved`,
+          { disputeId: updated.id },
+          { headers: authHeader ? { Authorization: authHeader } : undefined, timeout: 10_000 },
+        );
+      } catch (err: any) {
+        escrowUnlockWarning = 'Dispute resolved, but the escrow unlock could not be confirmed. It may still show as locked - retry or unlock it manually.';
+        this.logger.error(`Synchronous escrow unlock failed for dispute ${id} (escrow ${updated.relatedContractId})`, err?.response?.data || err?.message || err);
+      }
+    } else {
+      this.logger.warn('ESCROW_API_URL not configured; relying solely on the DISPUTE_RESOLVED Kafka event to unlock the escrow');
+    }
+
     this.logger.log(`Emitting DISPUTE_RESOLVED for escrow ${updated.relatedContractId}`);
     this.kafkaClient.emit(KafkaEvents.DISPUTE_RESOLVED, {
       disputeId: updated.id,
@@ -256,7 +280,7 @@ export class DisputeService {
       status: updated.status
     });
 
-    return updated;
+    return escrowUnlockWarning ? { ...updated, escrowUnlockWarning } : updated;
   }
 
   // Resolution path for the WhatsApp bot's AI adjudication. Distinct from resolve() (admin path):
@@ -654,7 +678,16 @@ export class DisputeService {
       'other unresolved dispute': 'OTHERS',
     };
 
+    const validCategories = ['QUALITY_ISSUES', 'DELAYED_DELIVERY', 'COMMUNICATION_CESSATION', 'OUT_OF_SCOPE_DEMANDS', 'OTHERS'];
     const normalized = value.toLowerCase();
-    return mapping[normalized] || value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+    const candidate = mapping[normalized] || value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+    // The fallback above is a best-effort guess for labels not in the mapping table above, and it
+    // can easily land on something that isn't a real BreachCategory value (e.g. "non delivery" ->
+    // "NON_DELIVERY") - Prisma would then reject the write with a raw, uncaught 500 instead of a
+    // clean validation error.
+    if (!validCategories.includes(candidate)) {
+      throw new BadRequestException(`Invalid breach category: ${input}`);
+    }
+    return candidate;
   }
 }

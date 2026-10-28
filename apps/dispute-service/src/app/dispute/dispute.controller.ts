@@ -85,10 +85,14 @@ export class DisputeController {
   @Patch(':id/review')
   resolve(@Param('id') id: string, @Body() resolveDto: ResolveDisputeDto, @Req() req: any) {
     if (req.user?.type !== 'ADMIN') throw new UnauthorizedException('Access denied: Admins only');
-    
+
     // Admin IDs pulled straight from decoded token
     const adminId = req.user?.id;
-    return this.disputeService.resolve(id, resolveDto, adminId);
+    // Forwarded as-is to escrow-service's synchronous unlock call below - it's the same admin
+    // token escrow-service's own JwtAuthGuard already knows how to verify, so this needs no
+    // separate internal service-to-service secret.
+    const authHeader = req.headers?.authorization || req.headers?.Authorization;
+    return this.disputeService.resolve(id, resolveDto, adminId, authHeader);
   }
 
   @Get('me')
