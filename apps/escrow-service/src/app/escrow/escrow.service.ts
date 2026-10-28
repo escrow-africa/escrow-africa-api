@@ -249,11 +249,12 @@ export class EscrowService implements OnModuleDestroy {
 		}
 
 		if (releasableStatuses.includes(escrow.status as string)) {
-			// check buyer wallet balance before releasing
-			const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
-			if (!buyerWallet || Number(buyerWallet.balance) < Number(escrow.amount)) {
-				throw new BadRequestException('INSUFFICIENT_FUNDS');
-			}
+			// The escrow amount was already moved out of the buyer's spendable balance back in
+			// fund() - it isn't sitting in their wallet waiting to be re-verified here, it's
+			// committed to this escrow. Re-checking the buyer's current wallet balance against the
+			// escrow amount at this point was comparing unrelated numbers and blocked every normal
+			// completion with a false INSUFFICIENT_FUNDS unless the buyer happened to have another
+			// full escrow amount sitting unused in their wallet.
 			await this.release(escrowId);
 		}
 
@@ -368,162 +369,70 @@ export class EscrowService implements OnModuleDestroy {
 		const fee = Number((amount * this.FEE_RATE).toFixed(2));
 		const sellerPayout = Number((amount - fee).toFixed(2));
 
-		// Ensure company receives the fee first (attempt provider transfer, fallback to local company wallet).
-		// Local wallet credits must only occur as explicit fallbacks when Monnify is not available.
-		const sellerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.sellerId } });
-		const buyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
-		const companyAccount = process.env.COMPANY_ACCOUNT_NUMBER;
-		const companyBankCode = process.env.COMPANY_BANK_CODE;
-
-		// determine sender account: prefer buyer's reserved account, fall back to ESCROW_HOLDING_ACCOUNT_NUMBER env
-		const senderAccount = buyerWallet?.accountNumber;
-
-		// First: transfer fee to company (best-effort). If Monnify not configured or transfer fails, credit local company wallet if configured.
-		try {
-			if (companyAccount && companyBankCode && senderAccount) {
-				await this.transferBetweenMonnifyAccounts(String(senderAccount), String(companyAccount), String(companyBankCode), fee, `Escrow fee ${escrow.id}`);
-				this.logger.debug('Transferred company fee via Monnify', { escrowId: escrow.id, amount: fee });
+		// The buyer's wallet was already debited the full escrow amount back in fund() - that
+		// amount isn't "in their wallet" anymore, it's committed to this escrow. Release just moves
+		// it internally: credit the seller's app wallet and the company's fee wallet, the same
+		// plain ledger adjustment fund()/refund() already use. This used to attempt a real Monnify
+		// bank transfer first and only credit locally as a fallback, but Monnify is no longer the
+		// active provider (Flutterwave is) and Flutterwave virtual accounts never populate
+		// `bankCode`, so that provider check always failed - sellers were never actually credited.
+		// Real cash-out to a bank still happens later, on-demand, via wallet-service's withdraw
+		// endpoint (Flutterwave), not automatically here.
+		const companyUserId = process.env.COMPANY_USER_ID;
+		if (companyUserId) {
+			const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
+			if (!companyWallet) {
+				await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
 			} else {
-				this.logger.warn('Company bank account not configured for Monnify transfer; crediting local company wallet');
-				const companyUserId = process.env.COMPANY_USER_ID;
-				if (companyUserId) {
-					const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
-					if (!companyWallet) {
-						await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
-					} else {
-						await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
-					}
-					try {
-						await this.prisma.transaction.create({
-							data: {
-								userId: companyUserId,
-								type: 'DEPOSIT',
-								title: `Escrow fee ${escrow.id}`,
-								amount: fee as any,
-								status: 'COMPLETED',
-								metadata: { escrowId } as any,
-							},
-						});
-					} catch (e: any) {
-						this.logger.warn('Failed to create company transaction record (local credit)', e?.message || e);
-					}
-				}
+				await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
 			}
-		} catch (e: any) {
-			this.logger.error('Failed to transfer fee to company via Monnify; crediting local company wallet if configured', e?.response?.data || e?.message || e);
-			const companyUserId = process.env.COMPANY_USER_ID;
-			if (companyUserId) {
-				const companyWallet = await this.prisma.wallet.findUnique({ where: { userId: companyUserId } });
-				if (!companyWallet) {
-					await this.prisma.wallet.create({ data: { userId: companyUserId, balance: fee } as any });
-				} else {
-					await this.prisma.wallet.update({ where: { id: companyWallet.id }, data: { balance: { increment: fee } as any } });
-				}
-				try {
-					await this.prisma.transaction.create({
-						data: {
-							userId: companyUserId,
-							type: 'DEPOSIT',
-							title: `Escrow fee (fallback) ${escrow.id}`,
-							amount: fee as any,
-							status: 'COMPLETED',
-							metadata: { escrowId } as any,
-						},
-					});
-				} catch (e: any) {
-					this.logger.warn('Failed to create company transaction record after fallback credit', e?.message || e);
-				}
-			}
-		}
-
-		let sellerTransferSucceeded = false;
-		let sellerProviderResp: any = null;
-		try {
-			// transfer seller payout via Monnify if seller has reserved account
-			if (sellerWallet && sellerWallet.accountNumber && sellerWallet.bankCode && senderAccount) {
-				const resp = await this.transferBetweenMonnifyAccounts(String(senderAccount), String(sellerWallet.accountNumber), String(sellerWallet.bankCode), sellerPayout, `Escrow payout ${escrow.id}`);
-				sellerProviderResp = resp;
-				sellerTransferSucceeded = true;
-				this.logger.debug('Transferred seller payout via Monnify', { escrowId: escrow.id, sellerId: escrow.sellerId, amount: sellerPayout, resp });
-			} else {
-				// Seller has no provider reserved account — do not credit locally automatically.
-				this.logger.warn('Seller has no provider reserved account; skipping automatic local credit. Manual payout required', { sellerId: escrow.sellerId, escrowId: escrow.id, amount: sellerPayout });
-			}
-		} catch (e: any) {
-			this.logger.error('Monnify seller payout failed; payout must be retried/handled manually', e?.response?.data || e?.message || e);
-		}
-
-		// If provider payout succeeded, reflect it in the seller's local wallet and ledger
-		if (sellerTransferSucceeded) {
 			try {
-				const currentSellerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.sellerId } });
-				if (!currentSellerWallet) {
-					await this.prisma.wallet.create({ data: { userId: escrow.sellerId, balance: sellerPayout } as any });
-				} else {
-					await this.prisma.wallet.update({ where: { id: currentSellerWallet.id }, data: { balance: { increment: sellerPayout } as any } });
-				}
-
-				const currentBuyerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.buyerId } });
-				if (currentBuyerWallet) {
-					await this.prisma.wallet.update({ where: { id: currentBuyerWallet.id }, data: { balance: { decrement: sellerPayout } as any } });
-				} else {
-					this.logger.warn('Buyer wallet not found when attempting to reflect seller payout; manual reconciliation may be required', { buyerId: escrow.buyerId, escrowId: escrow.id });
-				}
-
-				try {
-					await this.prisma.transaction.create({
-						data: {
-							userId: escrow.sellerId,
-							type: 'DEPOSIT',
-							title: `Escrow payout ${escrow.id}`,
-							amount: sellerPayout as any,
-							status: 'COMPLETED',
-							metadata: { escrowId, providerResponse: sellerProviderResp } as any,
-						},
-					});
-				} catch (e: any) {
-					this.logger.warn('Failed to create seller transaction record after payout', e?.message || e);
-				}
-			} catch (e: any) {
-				this.logger.warn('Failed to update/create seller wallet after provider payout', e?.message || e);
-			}
-		}
-
-		// Update buyer payment to SUCCESS if payout succeeded, and ensure a seller payout record exists.
-		try {
-			// create or ensure seller payout payment record exists
-			const existingPayout = await this.prisma.transaction.findFirst({ where: { referenceId: escrowId, userId: escrow.sellerId, paymentType: 'PAYOUT' } });
-			if (!existingPayout) {
-				const provider = process.env.PAYMENT_PROVIDER;
-				const possibleRef = (sellerProviderResp && (sellerProviderResp.responseBody?.transactionReference || sellerProviderResp.transactionReference || sellerProviderResp.response?.transactionReference)) || `escrow-payout-${escrowId}-${Date.now().toString(36)}`;
 				await this.prisma.transaction.create({
 					data: {
-						userId: escrow.sellerId,
-						type: 'PAYOUT',
-						title: `Escrow payout ${escrowId}`,
-						amount: sellerPayout as any,
-						referenceId: escrowId,
-						fee: 0 as any,
-						paymentType: 'PAYOUT',
-						provider: provider,
-						providerReference: possibleRef,
-						metadata: { escrowId, sellerPayout } as any,
-						status: sellerTransferSucceeded ? 'COMPLETED' : 'PENDING',
-					} as any,
+						userId: companyUserId,
+						type: 'DEPOSIT',
+						title: `Escrow fee ${escrow.id}`,
+						amount: fee as any,
+						status: 'COMPLETED',
+						metadata: { escrowId } as any,
+					},
 				});
-			} else {
-				// update existing payout record if it exists
-				await this.prisma.transaction.update({
-					where: { id: existingPayout.id },
-					data: {
-						amount: sellerPayout as any,
-						status: sellerTransferSucceeded ? 'COMPLETED' : 'PENDING',
-						metadata: { escrowId, sellerPayout, providerResponse: sellerProviderResp } as any,
-					} as any,
-				});
+			} catch (e: any) {
+				this.logger.warn('Failed to create company transaction record', e?.message || e);
 			}
-		} catch (e: any) {
-			this.logger.warn('Failed to update escrow payment record or create seller payout record', e?.message || e);
+		} else {
+			this.logger.warn('COMPANY_USER_ID not configured; escrow fee not credited anywhere', { escrowId: escrow.id, fee });
+		}
+
+		const sellerWallet = await this.prisma.wallet.findUnique({ where: { userId: escrow.sellerId } });
+		if (!sellerWallet) {
+			await this.prisma.wallet.create({ data: { userId: escrow.sellerId, balance: sellerPayout } as any });
+		} else {
+			await this.prisma.wallet.update({ where: { id: sellerWallet.id }, data: { balance: { increment: sellerPayout } as any } });
+		}
+
+		const existingPayout = await this.prisma.transaction.findFirst({ where: { referenceId: escrowId, userId: escrow.sellerId, paymentType: 'PAYOUT' } });
+		if (!existingPayout) {
+			await this.prisma.transaction.create({
+				data: {
+					userId: escrow.sellerId,
+					type: 'PAYOUT',
+					title: `Escrow payout ${escrowId}`,
+					amount: sellerPayout as any,
+					referenceId: escrowId,
+					fee: 0 as any,
+					paymentType: 'PAYOUT',
+					provider: process.env.PAYMENT_PROVIDER,
+					providerReference: `escrow-payout-${escrowId}-${Date.now().toString(36)}`,
+					metadata: { escrowId, sellerPayout } as any,
+					status: 'COMPLETED',
+				} as any,
+			});
+		} else {
+			await this.prisma.transaction.update({
+				where: { id: existingPayout.id },
+				data: { amount: sellerPayout as any, status: 'COMPLETED', metadata: { escrowId, sellerPayout } as any } as any,
+			});
 		}
 
 		const released = await this.prisma.escrow.update({

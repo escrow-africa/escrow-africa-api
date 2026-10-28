@@ -128,7 +128,10 @@ export class WalletService {
 
 		const resp = await this.provider.chargeCard(transactionReference, { ...card, pin }, undefined, amount, customer);
 
-		await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn.metadata as any) || {}), ...(resp.raw || {}) } } });
+		// A PIN submission can itself escalate to a further OTP step (e.g. the card's auth_model is
+		// "PIN" but Flutterwave still follows up asking for the OTP it just sent) - persist tokenId
+		// the same way topUp() does so a later authorizeCardOtp() call can find this transaction.
+		await this.prisma.transaction.update({ where: { id: txn.id }, data: { metadata: { ...((txn.metadata as any) || {}), ...(resp.raw || {}), tokenId: resp.tokenId } } });
 
 		if (resp.status && String(resp.status).toUpperCase().includes('SUCCESS')) {
 			await this.processProviderPayment(txn.providerReference!, userId, amount);
